@@ -18,6 +18,7 @@ from .config import (
     REQUEST_DELAY,
     SELECTOR_TIMEOUT,
     SELECTORS_CARD,
+    SELECTORS_TABLE,
 )
 
 log = logging.getLogger("campost.scraper")
@@ -48,13 +49,25 @@ async def fetch_list(page: Page, source: dict) -> list[dict]:
     """
     code = source["code"]
     base_url = source["base_url"]
-    # 모든 단국대 CMS 학과 페이지는 동일한 card 레이아웃 사용 (실 검증 완료)
-    sel = SELECTORS_CARD
+    crawler_type = source.get("crawler_type", "card")
+
+    if crawler_type == "table":
+        sel = SELECTORS_TABLE
+        list_fetcher = _fetch_list_table
+    elif crawler_type == "card":
+        sel = SELECTORS_CARD
+        list_fetcher = _fetch_list_card
+    else:
+        log.warning(
+            f"[{source['name']}] 알 수 없는 crawler_type={crawler_type}. card 타입으로 fallback"
+        )
+        sel = SELECTORS_CARD
+        list_fetcher = _fetch_list_card
 
     await page.goto(base_url, wait_until="networkidle", timeout=PAGE_TIMEOUT)
     await page.wait_for_selector(sel["title_anchor"], timeout=SELECTOR_TIMEOUT)
 
-    items = await _fetch_list_card(page, sel)
+    items = await list_fetcher(page, sel)
 
     # article_id prefix 부착 — fetch_list 단계에서 즉시 확정
     for item in items:

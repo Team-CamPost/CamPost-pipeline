@@ -60,7 +60,7 @@ def _is_raw_id(article_id: str) -> bool:
 
 
 def _compute_hash(article_id: str, title: str) -> str:
-    return hashlib.sha256(f"{article_id}:{title}".encode()).hexdigest()
+    return hashlib.sha256(f"{article_id}:{title}".encode("utf-8")).hexdigest()
 
 
 # -- DB migration -------------------------------------------------------------
@@ -157,11 +157,17 @@ def migrate_json_files() -> None:
         path.unlink()
         log.info(f"  {path.name} -> {new_path.name}")
 
+    existing_hashes: set[str] = set()
+    if HASHES_FILE.exists():
+        existing_hashes = set(json.loads(HASHES_FILE.read_text(encoding="utf-8")))
+
+    merged_hashes = existing_hashes | new_hashes
+
     HASHES_FILE.write_text(
-        json.dumps(sorted(new_hashes), ensure_ascii=False, indent=2),
+        json.dumps(sorted(merged_hashes), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    log.info(f"seen_hashes.json rebuilt: {len(new_hashes)}")
+    log.info(f"seen_hashes.json rebuilt: {len(merged_hashes)}")
     log.info("JSON migration complete")
 
 
