@@ -9,15 +9,15 @@ table 타입 (나머지): tr 행, a[href="#none"] 제목
 
 import asyncio
 import logging
+
 from playwright.async_api import Page
 
 from .config import (
     DETAIL_URL_TEMPLATE,
-    SELECTORS_CARD,
-    SELECTORS_TABLE,
     PAGE_TIMEOUT,
-    SELECTOR_TIMEOUT,
     REQUEST_DELAY,
+    SELECTOR_TIMEOUT,
+    SELECTORS_CARD,
 )
 
 log = logging.getLogger("campost.scraper")

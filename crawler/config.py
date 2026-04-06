@@ -8,6 +8,7 @@ crawl_sources DB 읽기는 Sprint 3에서 추가 예정.
 
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -74,21 +75,21 @@ DETAIL_URL_TEMPLATE = (
 # ── DOM 셀렉터 ────────────────────────────────────────────
 # card 타입: SW학과 (PoC 검증 완료)
 SELECTORS_CARD = {
-    "list_item":    ".dku-list-body-item:not(.header)",
+    "list_item": ".dku-list-body-item:not(.header)",
     "title_anchor": ".item-title h4 a",
     "detail_table": 'table[summary*="게시판"]',
-    "body":         "td.r_cont",
-    "attachment":   'a[href*="download=true"]',
+    "body": "td.r_cont",
+    "attachment": 'a[href*="download=true"]',
 }
 
 # table 타입: ACE, MOBILE, STAT, INDSEC, SWCU
 # (다중 크롤러 분석 2026-04-02 기준)
 SELECTORS_TABLE = {
-    "list_item":    'tr:has(a[href="#none"])',
+    "list_item": 'tr:has(a[href="#none"])',
     "title_anchor": 'a[href="#none"]',
     "detail_table": 'table[summary*="게시판"]',
-    "body":         "td.r_cont",
-    "attachment":   'a[href*="download=true"]',
+    "body": "td.r_cont",
+    "attachment": 'a[href*="download=true"]',
 }
 
 # ── 스케줄러 ─────────────────────────────────────────────
@@ -96,13 +97,11 @@ CRAWL_INTERVAL_MINUTES: int = int(os.getenv("CRAWL_INTERVAL_MINUTES", "60"))
 
 # ── Playwright ───────────────────────────────────────────
 HEADLESS: bool = os.getenv("HEADLESS", "true").lower() != "false"
-PAGE_TIMEOUT: int = 30_000       # ms
-SELECTOR_TIMEOUT: int = 15_000   # ms
-REQUEST_DELAY: float = 1.0       # 게시글 간 대기 (초)
+PAGE_TIMEOUT: int = 30_000  # ms
+SELECTOR_TIMEOUT: int = 15_000  # ms
+REQUEST_DELAY: float = 1.0  # 게시글 간 대기 (초)
 
-USER_AGENT = (
-    "Mozilla/5.0 (compatible; CamPost-Crawler/1.0; +https://campost.dku.ac.kr/bot)"
-)
+USER_AGENT = "Mozilla/5.0 (compatible; CamPost-Crawler/1.0; +https://campost.dku.ac.kr/bot)"
 
 # ── 저장 경로 ────────────────────────────────────────────
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./data"))
@@ -119,8 +118,8 @@ RAW_STORE_DIR.mkdir(parents=True, exist_ok=True)
 EXTRACTABLE_EXTS = {"pdf", "hwp", "hwpx"}
 
 # ── DB 연결 (crawl_jobs / parse_logs 쓰기 전용) ──────────
-DB_HOST     = os.getenv("DB_HOST", "db")
-DB_PORT     = int(os.getenv("DB_PORT", "5432"))
-DB_NAME     = os.getenv("POSTGRES_DB", "campost")
-DB_USER     = os.getenv("POSTGRES_USER", "campost")
+DB_HOST = os.getenv("DB_HOST", "db")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_NAME = os.getenv("POSTGRES_DB", "campost")
+DB_USER = os.getenv("POSTGRES_USER", "campost")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")

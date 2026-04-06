@@ -16,7 +16,7 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
-from .config import FILES_DIR, EXTRACTABLE_EXTS, USER_AGENT
+from .config import EXTRACTABLE_EXTS, FILES_DIR, USER_AGENT
 
 mimetypes.add_type("application/x-hwp", ".hwp")
 mimetypes.add_type("application/x-hwpx", ".hwpx")
@@ -60,6 +60,7 @@ def _extract_pdf(path: Path) -> tuple[str, str]:
     """Returns (extracted_text, parser_name)"""
     try:
         import pdfplumber
+
         texts = []
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
@@ -76,6 +77,7 @@ def _extract_hwp(path: Path) -> tuple[str, str]:
     """olefile로 HWP PrvText 스트림(UTF-16LE 평문) 추출."""
     try:
         import olefile
+
         ole = olefile.OleFileIO(str(path))
         if ole.exists("PrvText"):
             raw = ole.openstream("PrvText").read()
@@ -93,8 +95,7 @@ def _extract_hwpx(path: Path) -> tuple[str, str]:
         texts = []
         with zipfile.ZipFile(path) as z:
             section_files = sorted(
-                [n for n in z.namelist()
-                 if n.startswith("Contents/section") and n.endswith(".xml")]
+                [n for n in z.namelist() if n.startswith("Contents/section") and n.endswith(".xml")]
             )
             for section in section_files:
                 with z.open(section) as f:
@@ -160,17 +161,19 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
         file_size = save_path.stat().st_size if download_ok else None
         mime_type = _get_mime_type(att["name"])
 
-        results.append({
-            **att,
-            "file_key":       file_key,
-            "local_path":     f"files/{filename}",
-            "mime_type":      mime_type,
-            "file_size":      file_size,
-            "checksum":       checksum,
-            "extracted_text": extracted_text,
-            "download_ok":    download_ok,
-            "parser":         parser,
-            "parse_ok":       parse_ok,
-        })
+        results.append(
+            {
+                **att,
+                "file_key": file_key,
+                "local_path": f"files/{filename}",
+                "mime_type": mime_type,
+                "file_size": file_size,
+                "checksum": checksum,
+                "extracted_text": extracted_text,
+                "download_ok": download_ok,
+                "parser": parser,
+                "parse_ok": parse_ok,
+            }
+        )
 
     return results

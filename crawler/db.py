@@ -8,10 +8,10 @@ psycopg2 직접 사용 — SQLAlchemy는 Pipeline 범위에 과도함.
 """
 
 import logging
-import psycopg2
-from psycopg2.extras import RealDictCursor
 
-from .config import DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+import psycopg2
+
+from .config import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
 
 log = logging.getLogger("campost.db")
 
@@ -36,7 +36,8 @@ def create_crawl_job(source_id: int) -> int | None:
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO crawl_jobs (source_id, status) VALUES (%s, 'running') RETURNING id",
+                    "INSERT INTO crawl_jobs (source_id, status) "
+                    "VALUES (%s, 'running') RETURNING id",
                     (source_id,),
                 )
                 job_id = cur.fetchone()[0]

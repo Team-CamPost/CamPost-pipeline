@@ -103,6 +103,7 @@ def extract_apply_method(text: str) -> str | None:
 
 # ── 통합 추출 (다이어그램 Extractor 노드) ───────────────────
 
+
 def extract_key_info(body_text: str, attachments: list[dict]) -> dict:
     """
     공지 본문 + 첨부파일 텍스트를 종합해 구조화 필드 추출.

@@ -22,12 +22,14 @@ log = logging.getLogger("campost.storage")
 
 # ── 해시 유틸 ────────────────────────────────────────────
 
+
 def compute_hash(article_id: str, title: str) -> str:
     """SHA-256(article_id:title) — 중복 수집 방지 키"""
     return hashlib.sha256(f"{article_id}:{title}".encode("utf-8")).hexdigest()
 
 
 # ── 해시 영속성 ──────────────────────────────────────────
+
 
 def load_seen_hashes() -> set[str]:
     if HASHES_FILE.exists():
@@ -47,6 +49,7 @@ def save_seen_hashes(hashes: set[str]) -> None:
 #
 # 파일명: {article_id}.json
 # Spring Boot Importer가 이 디렉터리를 폴링하여 DB에 적재한다.
+
 
 def save_raw_json(notice: dict) -> Path:
     """

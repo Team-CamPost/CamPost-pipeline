@@ -24,8 +24,8 @@ from .config import CRAWL_INTERVAL_MINUTES, DETAIL_URL_TEMPLATE, HEADLESS, PAGE_
 from .db import create_crawl_job, finish_crawl_job, log_parse
 from .extractor import extract_key_info
 from .file_handler import process_attachments
-from .scraper import fetch_list, fetch_detail
-from .storage import compute_hash, load_seen_hashes, save_seen_hashes, save_raw_json
+from .scraper import fetch_detail, fetch_list
+from .storage import compute_hash, load_seen_hashes, save_raw_json, save_seen_hashes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +47,7 @@ def _launch_args() -> list[str]:
 
 def _find_headless_shell() -> str | None:
     import glob as _glob
+
     shells = _glob.glob(
         "/root/.cache/ms-playwright/chromium_headless_shell-*"
         "/chrome-headless-shell-linux64/chrome-headless-shell"
@@ -91,13 +92,15 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                 # parse_logs 기록 대상 수집
                 for att in attachments:
                     if att["download_ok"] and att["parser"] != "none":
-                        parse_records.append({
-                            "file_key":  att["file_key"],
-                            "parser":    att["parser"],
-                            "success":   att["parse_ok"],
-                            "chars":     len(att.get("extracted_text", "")),
-                            "error_msg": None,
-                        })
+                        parse_records.append(
+                            {
+                                "file_key": att["file_key"],
+                                "parser": att["parser"],
+                                "success": att["parse_ok"],
+                                "chars": len(att.get("extracted_text", "")),
+                                "error_msg": None,
+                            }
+                        )
 
                 key_info = extract_key_info(
                     body_text=detail.get("body_text", ""),
@@ -106,25 +109,27 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
 
                 notice = {
                     **item,
-                    "body_text":    detail.get("body_text", ""),
-                    "category":     detail.get("category", ""),
-                    "source_id":    source["id"],
-                    "attachments":  attachments,
-                    "source_url":   DETAIL_URL_TEMPLATE.format(
+                    "body_text": detail.get("body_text", ""),
+                    "category": detail.get("category", ""),
+                    "source_id": source["id"],
+                    "attachments": attachments,
+                    "source_url": DETAIL_URL_TEMPLATE.format(
                         base_url=source["base_url"],
                         raw_id=item["raw_id"],
                     ),
-                    "hash":         h,
-                    "crawled_at":   datetime.now(timezone.utc).isoformat(),
-                    "deadline":     key_info["deadline"],
-                    "target":       key_info["target"],
+                    "hash": h,
+                    "crawled_at": datetime.now(timezone.utc).isoformat(),
+                    "deadline": key_info["deadline"],
+                    "target": key_info["target"],
                     "apply_method": key_info["apply_method"],
                 }
 
                 save_raw_json(notice)
                 seen_hashes.add(h)
                 stats["new_count"] += 1
-                log.info(f"[{source['name']}] 수집 완료: [{item['article_id']}] {item['title'][:45]}")
+                log.info(
+                    f"[{source['name']}] 수집 완료: [{item['article_id']}] {item['title'][:45]}"
+                )
 
             except Exception as exc:
                 log.error(f"[{source['name']}] 게시글 처리 실패 ({item['article_id']}): {exc}")
@@ -197,6 +202,7 @@ async def run_all() -> None:
 
 def run_scheduler() -> None:
     """APScheduler로 주기적 크롤링 실행."""
+
     async def _loop():
         scheduler = AsyncIOScheduler()
         scheduler.add_job(
