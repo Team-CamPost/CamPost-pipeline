@@ -48,6 +48,11 @@ resolve_python() {
     return
   fi
 
+  if [[ -x .venv/bin/python ]]; then
+    echo ".venv/bin/python"
+    return
+  fi
+
   if command -v python >/dev/null 2>&1; then
     command -v python
     return

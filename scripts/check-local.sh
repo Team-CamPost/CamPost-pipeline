@@ -10,6 +10,11 @@ resolve_python() {
 		return
 	fi
 
+	if [[ -x .venv/bin/python ]]; then
+		echo ".venv/bin/python"
+		return
+	fi
+
 	if command -v python >/dev/null 2>&1; then
 		command -v python
 		return
@@ -23,6 +28,11 @@ resolve_python() {
 resolve_pre_commit() {
 	if [[ -x .venv/Scripts/pre-commit ]]; then
 		echo ".venv/Scripts/pre-commit"
+		return
+	fi
+
+	if [[ -x .venv/bin/pre-commit ]]; then
+		echo ".venv/bin/pre-commit"
 		return
 	fi
 
