@@ -123,6 +123,22 @@ cd CamPost-pipeline
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
+## 빠른 개발 루프 스크립트
+
+반복 개발 시 아래 스크립트를 사용하면 로컬 검증을 빠르게 반복할 수 있습니다.
+
+로컬 파이프라인 1회 실행(`.env` 로드 후 `python main.py`):
+
+```bash
+bash scripts/run-local.sh
+```
+
+로컬 검증(pre-commit + unittest):
+
+```bash
+bash scripts/check-local.sh
+```
+
 ## pre-commit / 포맷팅 설정
 
 이 저장소는 pre-commit 훅으로 Python 포맷/린트를 자동화할 수 있습니다.
