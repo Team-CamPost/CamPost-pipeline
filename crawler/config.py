@@ -15,8 +15,8 @@ load_dotenv()
 
 # ── 크롤링 대상 소스 목록 ──────────────────────────────────
 # Sprint 3에서 crawl_sources 테이블 읽기로 전환 예정.
-# id 값은 db/init.sql INSERT 순서와 일치해야 한다.
-SOURCES: list[dict] = [
+# id 값은 V4__seed_initial_data.sql INSERT 순서와 일치해야 한다.
+_ALL_SOURCES: list[dict] = [
     {
         "id": 1,
         "name": "소프트웨어학과",
@@ -29,37 +29,47 @@ SOURCES: list[dict] = [
         "name": "컴퓨터공학과",
         "code": "ACE",
         "base_url": "https://cms.dankook.ac.kr/web/ace/notice",
-        "crawler_type": "table",
+        "crawler_type": "card",
     },
     {
         "id": 3,
         "name": "모바일시스템공학과",
         "code": "MOBILE",
         "base_url": "https://cms.dankook.ac.kr/web/mobilesystems/-8",
-        "crawler_type": "table",
+        "crawler_type": "card",
     },
     {
         "id": 4,
         "name": "통계사이언스학과",
         "code": "STAT",
         "base_url": "https://cms.dankook.ac.kr/web/dkustat/-6",
-        "crawler_type": "table",
+        "crawler_type": "card",
     },
     {
         "id": 5,
         "name": "사이버보안학과",
         "code": "INDSEC",
         "base_url": "https://cms.dankook.ac.kr/web/indsec/-4",
-        "crawler_type": "table",
+        "crawler_type": "card",
     },
     {
         "id": 6,
         "name": "SW중심대학사업단",
         "code": "SWCU",
         "base_url": "https://swcu.dankook.ac.kr/en/-5",
-        "crawler_type": "table",
+        "crawler_type": "card",
     },
 ]
+
+# CRAWL_SOURCES 환경변수로 활성 소스를 쉼표 구분 코드로 지정한다.
+# 미설정 시 전체 소스 크롤링.
+# 예) CRAWL_SOURCES=SW,ACE  → 소프트웨어학과 + 컴퓨터공학과만 크롤링
+_crawl_sources_env = os.getenv("CRAWL_SOURCES", "").strip()
+if _crawl_sources_env:
+    _enabled_codes = {c.strip().upper() for c in _crawl_sources_env.split(",") if c.strip()}
+    SOURCES: list[dict] = [s for s in _ALL_SOURCES if s["code"] in _enabled_codes]
+else:
+    SOURCES = _ALL_SOURCES
 
 # ── 상세 URL 패턴 (모든 학과 동일) ───────────────────────────
 # {base_url}에 각 소스의 base_url을 대입한다.
