@@ -147,6 +147,15 @@ async def run_all() -> None:
     전체 소스 순차 크롤링.
     소스별 try-except로 에러 격리 — 한 학과 실패가 다른 학과에 영향 없음.
     """
+    if not SOURCES:
+        log.error("활성 소스가 없습니다. CRAWL_SOURCES 환경변수를 확인하세요.")
+        return
+
+    log.info(
+        f"크롤링 시작 — 활성 소스 {len(SOURCES)}개: "
+        + ", ".join(f"{s['name']}({s['code']})" for s in SOURCES)
+    )
+
     seen_hashes = load_seen_hashes()
 
     async with async_playwright() as pw:
@@ -212,7 +221,10 @@ def run_scheduler() -> None:
             next_run_time=datetime.now(timezone.utc),
         )
         scheduler.start()
-        log.info(f"스케줄러 시작 — {CRAWL_INTERVAL_MINUTES}분 간격, {len(SOURCES)}개 소스")
+        log.info(
+            f"스케줄러 시작 — {CRAWL_INTERVAL_MINUTES}분 간격, 활성 소스 {len(SOURCES)}개: "
+            + ", ".join(f"{s['name']}({s['code']})" for s in SOURCES)
+        )
         try:
             while True:
                 await asyncio.sleep(60)
