@@ -133,3 +133,9 @@ DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = os.getenv("POSTGRES_DB", "campost")
 DB_USER = os.getenv("POSTGRES_USER", "campost")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+
+# ── Gemini AI 설정 ────────────────────────────────────────
+# GEMINI_API_KEY 미설정 시 AI 추출 비활성화 → regex fallback 사용
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+AI_ENABLED: bool = bool(GEMINI_API_KEY)
