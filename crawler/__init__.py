@@ -20,9 +20,9 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from playwright.async_api import async_playwright
 
-from .config import CRAWL_INTERVAL_MINUTES, DETAIL_URL_TEMPLATE, HEADLESS, PAGE_TIMEOUT, SOURCES
+from .config import AI_ENABLED, CRAWL_INTERVAL_MINUTES, DETAIL_URL_TEMPLATE, GEMINI_API_KEY, GEMINI_MODEL, HEADLESS, PAGE_TIMEOUT, SOURCES
 from .db import create_crawl_job, finish_crawl_job, log_parse
-from .extractor import extract_key_info
+from .extractor import extract_key_info_with_ai
 from .file_handler import process_attachments
 from .scraper import fetch_detail, fetch_list
 from .storage import compute_hash, load_seen_hashes, save_raw_json, save_seen_hashes
@@ -102,9 +102,11 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                             }
                         )
 
-                key_info = extract_key_info(
+                key_info = extract_key_info_with_ai(
                     body_text=detail.get("body_text", ""),
                     attachments=attachments,
+                    api_key=GEMINI_API_KEY,
+                    model_name=GEMINI_MODEL,
                 )
 
                 notice = {
@@ -151,9 +153,11 @@ async def run_all() -> None:
         log.error("활성 소스가 없습니다. CRAWL_SOURCES 환경변수를 확인하세요.")
         return
 
+    ai_status = f"AI 마감일 추출: {'ON (' + GEMINI_MODEL + ')' if AI_ENABLED else 'OFF (regex only)'}"
     log.info(
         f"크롤링 시작 — 활성 소스 {len(SOURCES)}개: "
         + ", ".join(f"{s['name']}({s['code']})" for s in SOURCES)
+        + f" | {ai_status}"
     )
 
     seen_hashes = load_seen_hashes()
