@@ -181,6 +181,7 @@ async def fetch_detail(page: Page, raw_id: str, base_url: str) -> dict:
         """(sel) => {
             const bodyEl = document.querySelector(sel.body);
             const bodyText = bodyEl ? bodyEl.innerText.trim() : '';
+            const bodyHtml = bodyEl ? bodyEl.innerHTML : '';
 
             let category = '';
             const rows = document.querySelectorAll('table[summary*="게시판"] tr');
@@ -199,7 +200,7 @@ async def fetch_detail(page: Page, raw_id: str, base_url: str) -> dict:
                 ext:  a.textContent.trim().split('.').pop().toLowerCase(),
             }));
 
-            return { body_text: bodyText, category, attachments };
+            return { body_text: bodyText, body_html: bodyHtml, category, attachments };
         }""",
         SELECTORS_CARD,
     )

@@ -135,7 +135,9 @@ _AI_MAX_CHARS = 3_000
 
 def _build_prompt(text: str) -> str:
     truncated = text[:_AI_MAX_CHARS]
+    today = datetime.now().strftime("%Y-%m-%d")
     return f"""대학교 공지사항에서 핵심 정보를 추출하세요.
+오늘 날짜: {today}
 반드시 JSON만 출력하세요 (마크다운 코드블록, 설명 없이).
 
 출력 형식:
@@ -146,7 +148,8 @@ def _build_prompt(text: str) -> str:
 }}
 
 규칙:
-- deadline: 날짜가 명시된 경우만 추출. "이번 달 말", "추후 공지" 등 불명확한 경우 null
+- deadline: 명시된 날짜는 그대로 변환. "이번 달 말"은 오늘 날짜 기준 해당 월의 마지막 날로 계산. "다음 달 N일", "이번 주 금요일" 등 상대적 표현도 오늘 날짜 기준으로 계산
+- deadline: "추후 공지", "미정", "별도 안내" 등 날짜 계산이 불가능한 경우 null
 - 확인되지 않는 정보는 추측하지 말고 null로 처리
 
 공지 내용:

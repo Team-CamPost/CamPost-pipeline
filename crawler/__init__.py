@@ -23,7 +23,7 @@ from playwright.async_api import async_playwright
 from .config import AI_ENABLED, CRAWL_INTERVAL_MINUTES, DETAIL_URL_TEMPLATE, GEMINI_API_KEY, GEMINI_MODEL, HEADLESS, PAGE_TIMEOUT, SOURCES
 from .db import create_crawl_job, finish_crawl_job, log_parse
 from .extractor import extract_key_info_with_ai
-from .file_handler import process_attachments
+from .file_handler import extract_external_images, extract_inline_images, process_attachments
 from .scraper import fetch_detail, fetch_list
 from .storage import compute_hash, load_seen_hashes, save_raw_json, save_seen_hashes
 
@@ -89,6 +89,18 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                     item["article_id"],
                 )
 
+                inline_images = extract_inline_images(
+                    detail.get("body_html", ""),
+                    item["article_id"],
+                )
+                attachments.extend(inline_images)
+
+                external_images = await extract_external_images(
+                    detail.get("body_html", ""),
+                    item["article_id"],
+                )
+                attachments.extend(external_images)
+
                 # parse_logs 기록 대상 수집
                 for att in attachments:
                     if att["download_ok"] and att["parser"] != "none":
@@ -112,6 +124,7 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                 notice = {
                     **item,
                     "body_text": detail.get("body_text", ""),
+                    "body_html": detail.get("body_html", ""),
                     "category": detail.get("category", ""),
                     "source_id": source["id"],
                     "attachments": attachments,
