@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger("campost.extractor")
 
@@ -135,7 +136,7 @@ _AI_MAX_CHARS = 3_000
 
 def _build_prompt(text: str) -> str:
     truncated = text[:_AI_MAX_CHARS]
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
     return f"""대학교 공지사항에서 핵심 정보를 추출하세요.
 오늘 날짜: {today}
 반드시 JSON만 출력하세요 (마크다운 코드블록, 설명 없이).

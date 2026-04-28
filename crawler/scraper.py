@@ -166,7 +166,7 @@ async def fetch_detail(page: Page, raw_id: str, base_url: str) -> dict:
         base_url: 소스별 base_url
 
     Returns:
-        {body_text, category, attachments: [{name, url, ext}]}
+        {body_text, body_html, category, attachments: [{name, url, ext}]}
     """
     url = _make_detail_url(base_url, raw_id)
 
