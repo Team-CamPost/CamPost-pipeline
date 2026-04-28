@@ -157,12 +157,21 @@ def _build_prompt(text: str) -> str:
 {truncated}"""
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _parse_ai_response(raw: str) -> dict:
     cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip()
     cleaned = re.sub(r"```\s*$", "", cleaned).strip()
     data = json.loads(cleaned)
+
+    deadline = data.get("deadline") or None
+    if deadline is not None and not _DATE_RE.match(deadline):
+        log.debug(f"  [AI] deadline 포맷 불일치, null 처리: {deadline!r}")
+        deadline = None
+
     return {
-        "deadline": data.get("deadline") or None,
+        "deadline": deadline,
         "target": data.get("target") or None,
         "apply_method": data.get("apply_method") or None,
     }
@@ -227,8 +236,8 @@ def extract_key_info_with_ai(
         return regex_result
 
     merged = {
-        "deadline":     ai_result["deadline"]     or regex_result["deadline"],
-        "target":       ai_result["target"]       or regex_result["target"],
-        "apply_method": ai_result["apply_method"] or regex_result["apply_method"],
+        "deadline":     ai_result["deadline"]     if ai_result["deadline"]     is not None else regex_result["deadline"],
+        "target":       ai_result["target"]       if ai_result["target"]       is not None else regex_result["target"],
+        "apply_method": ai_result["apply_method"] if ai_result["apply_method"] is not None else regex_result["apply_method"],
     }
     return merged

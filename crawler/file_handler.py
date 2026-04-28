@@ -128,7 +128,7 @@ def _extract_hwp_pyhwp(path: Path) -> str:
         # 빈 "|  |" 가 생기지 않는다.
         rows_dict: dict[int, list[tuple[int, str]]] = defaultdict(list)
         for (r, c), lines in cell_data.items():
-            text = " / ".join(l for l in lines if l.strip())
+            text = " / ".join(line for line in lines if line.strip())
             rows_dict[r].append((c, text))
 
         out_lines = []
@@ -284,7 +284,7 @@ async def extract_external_images(body_html: str, article_id: str) -> list[dict]
         if raw_ext not in ("jpg", "jpeg", "png", "gif", "webp", "svg"):
             raw_ext = "jpg"
 
-        mime_type = f"image/svg+xml" if raw_ext == "svg" else f"image/{'jpeg' if raw_ext == 'jpg' else raw_ext}"
+        mime_type = "image/svg+xml" if raw_ext == "svg" else "image/" + ("jpeg" if raw_ext == "jpg" else raw_ext)
 
         filename = _safe_filename(article_id, f"ext_img_{count}.{raw_ext}")
         save_path = FILES_DIR / filename
