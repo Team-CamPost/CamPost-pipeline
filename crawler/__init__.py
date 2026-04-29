@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from playwright.async_api import async_playwright
 
-from .config import AI_ENABLED, CRAWL_INTERVAL_MINUTES, DETAIL_URL_TEMPLATE, GEMINI_API_KEY, GEMINI_MODEL, HEADLESS, PAGE_TIMEOUT, SOURCES
+from .config import AI_ENABLED, CRAWL_INTERVAL_MINUTES, DETAIL_URL_TEMPLATE, GEMINI_API_KEY, GEMINI_MODEL, HEADLESS, PAGE_TIMEOUT, RAW_STORE_DIR, SOURCES
 from .db import create_crawl_job, finish_crawl_job, log_parse
 from .extractor import extract_key_info_with_ai
 from .file_handler import extract_external_images, extract_inline_images, process_attachments
@@ -119,6 +119,8 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                     attachments=attachments,
                     api_key=GEMINI_API_KEY,
                     model_name=GEMINI_MODEL,
+                    title=item.get("title", ""),
+                    notice_date=item.get("date", ""),
                 )
 
                 notice = {
@@ -226,6 +228,100 @@ async def run_all() -> None:
     log.info("전체 소스 크롤링 완료")
 
 
+def run_startup_reextract() -> None:
+    """
+    컨테이너 시작 시 기존 raw JSON 중 null 필드가 있는 파일을 현재 extractor로 재처리.
+    변경된 파일은 덮어써서 Importer가 자동으로 DB를 갱신하게 한다.
+    기존 값은 보존하고 null 필드만 채운다.
+
+    AI 호출 간 4초 딜레이로 Gemini free tier RPM(15회/분) 초과를 방지한다.
+    """
+    import json
+    import time
+
+    files = list(RAW_STORE_DIR.glob("*.json"))
+    if not files:
+        return
+
+    # null 필드가 있는 파일만 추려서 처리 대상 파악
+    todo = []
+    for path in files:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log.warning(f"[startup] {path.name} 읽기 실패: {exc}")
+            continue
+        if not (data.get("deadline") is not None and data.get("target") is not None and data.get("apply_method") is not None):
+            body_text = data.get("body_text") or ""
+            attachments = data.get("attachments") or []
+            if body_text or any(a.get("extracted_text") for a in attachments):
+                todo.append(path)
+
+    if not todo:
+        log.info(f"[startup] 재추출 불필요 — {len(files)}개 파일 이미 최신 상태")
+        return
+
+    log.info(f"[startup] null 필드 있는 파일 {len(todo)}개 재추출 시작 (AI 간 4초 딜레이)")
+    updated = 0
+    ai_call_count = 0
+
+    for path in todo:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log.warning(f"[startup] {path.name} 읽기 실패: {exc}")
+            continue
+
+        old_deadline     = data.get("deadline")
+        old_target       = data.get("target")
+        old_apply_method = data.get("apply_method")
+
+        body_text   = data.get("body_text") or ""
+        attachments = data.get("attachments") or []
+
+        # AI 호출 전 딜레이 (첫 번째 호출 제외)
+        if GEMINI_API_KEY and ai_call_count > 0:
+            time.sleep(4)
+
+        try:
+            result = extract_key_info_with_ai(
+                body_text,
+                attachments,
+                GEMINI_API_KEY,
+                GEMINI_MODEL,
+                title=data.get("title") or "",
+                notice_date=data.get("date") or "",
+            )
+            if GEMINI_API_KEY:
+                ai_call_count += 1
+        except Exception as exc:
+            log.warning(f"[startup] {path.stem} 추출 실패: {exc}")
+            continue
+
+        new_deadline     = old_deadline     if old_deadline     is not None else result["deadline"]
+        new_target       = old_target       if old_target       is not None else result["target"]
+        new_apply_method = old_apply_method if old_apply_method is not None else result["apply_method"]
+
+        if (new_deadline, new_target, new_apply_method) == (old_deadline, old_target, old_apply_method):
+            continue
+
+        data["deadline"]     = new_deadline
+        data["target"]       = new_target
+        data["apply_method"] = new_apply_method
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        updated += 1
+        log.info(
+            f"[startup] {path.stem} — "
+            f"마감: {old_deadline!r} → {new_deadline!r} | "
+            f"대상: {old_target!r} → {new_target!r}"
+        )
+
+    if updated:
+        log.info(f"[startup] {updated}개 업데이트 완료 → Importer가 30초 내 DB 자동 반영")
+    else:
+        log.info(f"[startup] {len(todo)}개 처리했으나 변경 없음 (모두 null이거나 동일 값)")
+
+
 def run_scheduler() -> None:
     """APScheduler로 주기적 크롤링 실행."""
 
@@ -253,6 +349,7 @@ def run_scheduler() -> None:
 
 
 def main() -> None:
+    run_startup_reextract()
     loop_mode = "--loop" in sys.argv
     if loop_mode:
         run_scheduler()
