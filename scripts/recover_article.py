@@ -98,7 +98,7 @@ async def recover(code: str, raw_id: str) -> None:
         attachment_links = await page.query_selector_all('a[href*="download=true"]')
         raw_attachments = []
         for link in attachment_links:
-            href = await link.get_attribute("href") or ""
+            href = await link.evaluate("(el) => el.href") or ""
             name = (await link.inner_text()).strip()
             raw_attachments.append(
                 {

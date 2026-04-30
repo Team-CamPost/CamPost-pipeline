@@ -74,8 +74,9 @@ def re_extract(
 
         body_text = data.get("body_text") or ""
         body_html = data.get("body_html") or ""
-        attachments = data.get("attachments") or []
-        has_att_text = any(a.get("extracted_text") for a in attachments)
+        raw_attachments = data.get("attachments") or []
+        attachments = raw_attachments if isinstance(raw_attachments, list) else []
+        has_att_text = any(a.get("extracted_text") for a in attachments if isinstance(a, dict))
 
         if wants_key_info and not body_text and not has_att_text:
             skipped += 1

@@ -10,30 +10,75 @@ source body.
 from __future__ import annotations
 
 import html
-import re
 from copy import deepcopy
+from urllib.parse import urlparse
+
+from bs4 import BeautifulSoup, Comment
 
 IMAGE_EXTS = {"jpg", "jpeg", "png", "gif", "webp", "svg"}
 
-_IMG_SRC_RE = re.compile(
-    r"(<img\b[^>]*?\bsrc\s*=\s*)([\"'])(.*?)(\2)",
-    re.IGNORECASE | re.DOTALL,
-)
-_SCRIPT_STYLE_RE = re.compile(
-    r"<\s*(script|style|iframe|object|embed)\b[^>]*>.*?<\s*/\s*\1\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
-_DANGEROUS_SINGLE_TAG_RE = re.compile(
-    r"<\s*(script|style|iframe|object|embed|meta|link)\b[^>]*?/?>",
-    re.IGNORECASE | re.DOTALL,
-)
-_EVENT_ATTR_RE = re.compile(
-    r"\s+on[a-zA-Z]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)",
-    re.IGNORECASE | re.DOTALL,
-)
-_JS_URL_ATTR_RE = re.compile(
-    r"\s+(href|src)\s*=\s*([\"'])\s*javascript:[^\"']*\2",
-    re.IGNORECASE | re.DOTALL,
+_DANGEROUS_TAGS = {"script", "style", "iframe", "object", "embed", "meta", "link"}
+_ALLOWED_TAGS = {
+    "a",
+    "b",
+    "blockquote",
+    "br",
+    "caption",
+    "code",
+    "col",
+    "colgroup",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "figcaption",
+    "figure",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "i",
+    "img",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "s",
+    "section",
+    "small",
+    "span",
+    "strong",
+    "sub",
+    "sup",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "u",
+    "ul",
+}
+_GLOBAL_ATTRS = {"class", "title"}
+_TAG_ATTRS = {
+    "a": {"href", "target", "rel"},
+    "col": {"span"},
+    "img": {"src", "alt", "loading", "height", "width"},
+    "td": {"colspan", "rowspan", "headers"},
+    "th": {"colspan", "rowspan", "headers", "scope"},
+}
+_SAFE_HREF_SCHEMES = {"", "http", "https", "mailto", "tel"}
+_SAFE_SRC_SCHEMES = {"", "http", "https"}
+_SAFE_DATA_IMAGE_PREFIXES = (
+    "data:image/jpeg;base64,",
+    "data:image/png;base64,",
+    "data:image/gif;base64,",
+    "data:image/webp;base64,",
 )
 
 
@@ -51,12 +96,52 @@ def _is_downloaded(attachment: dict) -> bool:
     return bool(attachment.get("download_ok") and attachment.get("local_path"))
 
 
-def _strip_unsafe_html(value: str) -> str:
-    cleaned = _SCRIPT_STYLE_RE.sub("", value or "")
-    cleaned = _DANGEROUS_SINGLE_TAG_RE.sub("", cleaned)
-    cleaned = _EVENT_ATTR_RE.sub("", cleaned)
-    cleaned = _JS_URL_ATTR_RE.sub("", cleaned)
-    return cleaned
+def _is_safe_href(value: str) -> bool:
+    parsed = urlparse((value or "").strip())
+    return parsed.scheme.lower() in _SAFE_HREF_SCHEMES
+
+
+def _is_safe_src(value: str) -> bool:
+    src = (value or "").strip()
+    if src.startswith(_SAFE_DATA_IMAGE_PREFIXES):
+        return True
+    if src.startswith("files/"):
+        return True
+    parsed = urlparse(src)
+    return parsed.scheme.lower() in _SAFE_SRC_SCHEMES
+
+
+def _sanitize_body_html(value: str) -> str:
+    soup = BeautifulSoup(value or "", "html.parser")
+
+    for comment in soup.find_all(string=lambda item: isinstance(item, Comment)):
+        comment.extract()
+
+    for tag in list(soup.find_all(True)):
+        name = (tag.name or "").lower()
+        if name in _DANGEROUS_TAGS:
+            tag.decompose()
+            continue
+        if name not in _ALLOWED_TAGS:
+            tag.unwrap()
+            continue
+
+        allowed_attrs = _GLOBAL_ATTRS | _TAG_ATTRS.get(name, set())
+        for attr in list(tag.attrs):
+            if attr.lower() not in allowed_attrs:
+                del tag.attrs[attr]
+
+        if tag.has_attr("href") and not _is_safe_href(str(tag["href"])):
+            del tag.attrs["href"]
+        if tag.has_attr("src") and not _is_safe_src(str(tag["src"])):
+            del tag.attrs["src"]
+
+        if name == "a" and tag.has_attr("target"):
+            tag["rel"] = "noopener noreferrer"
+        if name == "img":
+            tag["loading"] = tag.get("loading") or "lazy"
+
+    return str(soup)
 
 
 def _body_image_attachments(attachments: list[dict]) -> tuple[dict[str, dict], list[dict]]:
@@ -71,6 +156,7 @@ def _body_image_attachments(attachments: list[dict]) -> tuple[dict[str, dict], l
         name = attachment.get("name") or ""
         if url:
             by_url[url] = attachment
+            by_url[html.unescape(url)] = attachment
         elif "_inline_img_" in name or "inline_img_" in name:
             inline_images.append(attachment)
 
@@ -86,11 +172,10 @@ def _rewrite_body_image_sources(
     used_file_keys: set[str] = set()
     body_images: list[dict] = []
 
-    def replace(match: re.Match) -> str:
-        nonlocal inline_index
+    soup = BeautifulSoup(body_html or "", "html.parser")
 
-        prefix, quote, src, suffix = match.groups()
-        src = (src or "").strip()
+    for image in soup.find_all("img"):
+        src = (image.get("src") or "").strip()
         attachment = None
 
         if src.startswith("data:image/"):
@@ -98,10 +183,10 @@ def _rewrite_body_image_sources(
                 attachment = inline_images[inline_index]
                 inline_index += 1
         else:
-            attachment = by_url.get(src)
+            attachment = by_url.get(src) or by_url.get(html.unescape(src))
 
         if not attachment:
-            return match.group(0)
+            continue
 
         local_path = attachment["local_path"]
         file_key = attachment.get("file_key") or attachment.get("name") or local_path
@@ -116,9 +201,16 @@ def _rewrite_body_image_sources(
                 "file_size": attachment.get("file_size"),
             }
         )
-        return f'{prefix}{quote}{html.escape(local_path, quote=True)}{suffix}'
+        image["src"] = local_path
+        image.attrs.pop("srcset", None)
+        image.attrs.pop("sizes", None)
 
-    return _IMG_SRC_RE.sub(replace, body_html or ""), body_images, used_file_keys
+    return str(soup), body_images, used_file_keys
+
+
+def _count_tables(content_html: str) -> int:
+    soup = BeautifulSoup(content_html or "", "html.parser")
+    return len(soup.find_all("table"))
 
 
 def _image_attachment_gallery(
@@ -175,8 +267,8 @@ def build_content_payload(body_html: str, attachments: list[dict] | None) -> dic
       - content_assets: image/file metadata for API consumers
       - content_stats: quick counts for importer/tests
     """
-    attachments = attachments or []
-    safe_body_html = _strip_unsafe_html(body_html or "")
+    attachments = [item for item in (attachments or []) if isinstance(item, dict)]
+    safe_body_html = _sanitize_body_html(body_html or "")
     rewritten_html, body_images, used_file_keys = _rewrite_body_image_sources(
         safe_body_html,
         attachments,
@@ -207,7 +299,7 @@ def build_content_payload(body_html: str, attachments: list[dict] | None) -> dic
         "content_stats": {
             "image_count": len(images),
             "file_count": len(downloadable_files),
-            "table_count": len(re.findall(r"<\s*table\b", content_html, re.IGNORECASE)),
+            "table_count": _count_tables(content_html),
         },
     }
 

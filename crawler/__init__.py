@@ -14,6 +14,7 @@ Pipeline 흐름:
 
 import asyncio
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -34,6 +35,10 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("campost.runner")
+
+
+def _env_flag(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _launch_args() -> list[str]:
@@ -250,6 +255,7 @@ def run_startup_reextract() -> None:
         return
 
     # null 필드가 있는 파일만 추려서 처리 대상 파악
+    backfill_content = _env_flag("CAMPOST_BACKFILL_CONTENT_ON_STARTUP")
     todo = []
     content_updated = 0
     for path in files:
@@ -258,15 +264,21 @@ def run_startup_reextract() -> None:
         except Exception as exc:
             log.warning(f"[startup] {path.name} 읽기 실패: {exc}")
             continue
-        attachments = data.get("attachments") or []
-        content_payload = build_content_payload(data.get("body_html") or "", attachments)
-        if any(data.get(k) != v for k, v in content_payload.items()):
-            data.update(content_payload)
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            content_updated += 1
+        raw_attachments = data.get("attachments") or []
+        attachments = raw_attachments if isinstance(raw_attachments, list) else []
+        if backfill_content:
+            try:
+                content_payload = build_content_payload(data.get("body_html") or "", attachments)
+            except Exception as exc:
+                log.warning(f"[startup] {path.name} content_html generation failed: {exc}")
+            else:
+                if any(data.get(k) != v for k, v in content_payload.items()):
+                    data.update(content_payload)
+                    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    content_updated += 1
         if not (data.get("deadline") is not None and data.get("target") is not None and data.get("apply_method") is not None):
             body_text = data.get("body_text") or ""
-            if body_text or any(a.get("extracted_text") for a in attachments):
+            if body_text or any(a.get("extracted_text") for a in attachments if isinstance(a, dict)):
                 todo.append(path)
 
     if content_updated:
@@ -292,7 +304,8 @@ def run_startup_reextract() -> None:
         old_apply_method = data.get("apply_method")
 
         body_text   = data.get("body_text") or ""
-        attachments = data.get("attachments") or []
+        raw_attachments = data.get("attachments") or []
+        attachments = raw_attachments if isinstance(raw_attachments, list) else []
 
         # AI 호출 전 딜레이 (첫 번째 호출 제외)
         if GEMINI_API_KEY and ai_call_count > 0:
