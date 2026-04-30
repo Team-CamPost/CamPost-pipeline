@@ -21,6 +21,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from playwright.async_api import async_playwright
 
 from .config import AI_ENABLED, CRAWL_INTERVAL_MINUTES, DETAIL_URL_TEMPLATE, GEMINI_API_KEY, GEMINI_MODEL, HEADLESS, PAGE_TIMEOUT, RAW_STORE_DIR, SOURCES
+from .content import build_content_payload
 from .db import create_crawl_job, finish_crawl_job, log_parse
 from .extractor import extract_key_info_with_ai
 from .file_handler import extract_external_images, extract_inline_images, process_attachments
@@ -122,11 +123,16 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                     title=item.get("title", ""),
                     notice_date=item.get("date", ""),
                 )
+                content_payload = build_content_payload(
+                    detail.get("body_html", ""),
+                    attachments,
+                )
 
                 notice = {
                     **item,
                     "body_text": detail.get("body_text", ""),
                     "body_html": detail.get("body_html", ""),
+                    **content_payload,
                     "category": detail.get("category", ""),
                     "source_id": source["id"],
                     "attachments": attachments,
@@ -245,17 +251,26 @@ def run_startup_reextract() -> None:
 
     # null 필드가 있는 파일만 추려서 처리 대상 파악
     todo = []
+    content_updated = 0
     for path in files:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:
             log.warning(f"[startup] {path.name} 읽기 실패: {exc}")
             continue
+        attachments = data.get("attachments") or []
+        content_payload = build_content_payload(data.get("body_html") or "", attachments)
+        if any(data.get(k) != v for k, v in content_payload.items()):
+            data.update(content_payload)
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            content_updated += 1
         if not (data.get("deadline") is not None and data.get("target") is not None and data.get("apply_method") is not None):
             body_text = data.get("body_text") or ""
-            attachments = data.get("attachments") or []
             if body_text or any(a.get("extracted_text") for a in attachments):
                 todo.append(path)
+
+    if content_updated:
+        log.info(f"[startup] content_html updated: {content_updated}")
 
     if not todo:
         log.info(f"[startup] 재추출 불필요 — {len(files)}개 파일 이미 최신 상태")
