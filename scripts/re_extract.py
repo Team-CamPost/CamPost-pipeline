@@ -2,7 +2,7 @@
 Rebuild derived raw JSON fields.
 
 Examples:
-  python scripts/re_extract.py --no-ai --source SW --fields deadline
+  python scripts/re_extract.py --no-ai --source SW --fields deadline,deadline_time,deadline_at
   python scripts/re_extract.py --source SW --fields content_html,content_assets,content_stats
   python scripts/re_extract.py --dry-run --source SW --fields content_html,content_assets,content_stats
 """
@@ -18,7 +18,7 @@ from crawler.config import GEMINI_API_KEY, GEMINI_MODEL, OUTPUT_DIR
 from crawler.content import build_content_payload
 from crawler.extractor import extract_key_info_with_ai
 
-KEY_INFO_FIELDS = {"deadline", "target", "apply_method"}
+KEY_INFO_FIELDS = {"deadline", "deadline_time", "deadline_at", "target", "apply_method"}
 CONTENT_FIELDS = {"content_html", "content_assets", "content_stats"}
 ALLOWED_FIELDS = KEY_INFO_FIELDS | CONTENT_FIELDS
 
@@ -150,10 +150,11 @@ if __name__ == "__main__":
     parser.add_argument("--source", help="process one source code only, e.g. SW")
     parser.add_argument(
         "--fields",
-        default="deadline,target,apply_method",
+        default="deadline,deadline_time,deadline_at,target,apply_method",
         help=(
             "comma-separated fields to update. "
-            "Allowed: deadline,target,apply_method,content_html,content_assets,content_stats"
+            "Allowed: deadline,deadline_time,deadline_at,target,apply_method,"
+            "content_html,content_assets,content_stats"
         ),
     )
     args = parser.parse_args()

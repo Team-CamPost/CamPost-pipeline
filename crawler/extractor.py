@@ -9,6 +9,8 @@ CamPost Crawler — 핵심 정보 추출기 (Extractor)
 
 추출 필드:
     deadline     : 마감일 (YYYY-MM-DD 또는 None)
+    deadline_time: 마감시간 (HH:MM 또는 None)
+    deadline_at  : 마감일시 (YYYY-MM-DDTHH:MM:SS+09:00 또는 None)
     target       : 지원 대상 (ex: "3~4학년", "전학년 재학생")
     apply_method : 신청 방법 (ex: "이메일 제출", "온라인 신청")
 """
@@ -63,6 +65,40 @@ def _parse_date(y: str, m: str, d: str) -> str | None:
         return datetime(int(y), int(m), int(d)).strftime("%Y-%m-%d")
     except ValueError:
         return None
+
+
+def _parse_time(
+    ampm: str | None,
+    hour: str,
+    minute_colon: str | None = None,
+    minute_korean: str | None = None,
+) -> str | None:
+    minute = minute_colon if minute_colon is not None else minute_korean
+    minute = minute or "00"
+
+    try:
+        h = int(hour)
+        m = int(minute)
+    except ValueError:
+        return None
+
+    marker = (ampm or "").lower()
+    if marker in {"오전", "am"}:
+        if h == 12:
+            h = 0
+    elif marker in {"오후", "pm"}:
+        if h < 12:
+            h += 12
+
+    if not 0 <= h <= 23 or not 0 <= m <= 59:
+        return None
+    return f"{h:02d}:{m:02d}"
+
+
+def _build_deadline_at(deadline: str | None, deadline_time: str | None) -> str | None:
+    if not deadline or not deadline_time:
+        return None
+    return f"{deadline}T{deadline_time}:00+09:00"
 
 
 def _parse_reference_date(value: str | None) -> date | None:
@@ -129,6 +165,62 @@ def _extract_dates(text: str, reference_date: date | None) -> list[tuple[int, st
     return sorted(dates, key=lambda item: item[0])
 
 
+_TIME_RE = (
+    r"(?:(오전|오후|AM|PM|am|pm)\s*)?"
+    r"(\d{1,2})"
+    r"(?::(\d{2})|시\s*(?:(\d{1,2})분?)?)"
+)
+
+
+def _extract_datetime_records(
+    text: str,
+    reference_date: date | None,
+) -> list[tuple[int, int, str, str | None]]:
+    full_pattern = re.compile(
+        r"(?<!\d)"
+        r"(\d{4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*(?:일)?"
+        r"(?:\([월화수목금토일]\))?"
+        r"(?:\.|\))?"
+        rf"(?:\s*{_TIME_RE})?"
+    )
+    short_pattern = re.compile(
+        r"(?<!\d)"
+        r"(\d{1,2})\s*(?:[./]|월)\s*(\d{1,2})\s*(?:일)?"
+        r"(?:\([월화수목금토일]\))?"
+        r"(?:\.|\))?"
+        rf"(?:\s*{_TIME_RE})?"
+    )
+
+    records: list[tuple[int, int, str, str | None]] = []
+    occupied: list[tuple[int, int]] = []
+
+    for match in full_pattern.finditer(text):
+        parsed_date = _parse_date(match.group(1), match.group(2), match.group(3))
+        if not parsed_date:
+            continue
+        parsed_time = None
+        if match.group(5):
+            parsed_time = _parse_time(match.group(4), match.group(5), match.group(6), match.group(7))
+        records.append((match.start(), match.end(), parsed_date, parsed_time))
+        occupied.append(match.span())
+
+    def overlaps_full_date(span: tuple[int, int]) -> bool:
+        return any(not (span[1] <= start or end <= span[0]) for start, end in occupied)
+
+    for match in short_pattern.finditer(text):
+        if overlaps_full_date(match.span()):
+            continue
+        parsed_date = _parse_short_date(match.group(1), match.group(2), reference_date)
+        if not parsed_date:
+            continue
+        parsed_time = None
+        if match.group(4):
+            parsed_time = _parse_time(match.group(3), match.group(4), match.group(5), match.group(6))
+        records.append((match.start(), match.end(), parsed_date, parsed_time))
+
+    return sorted(records, key=lambda item: item[0])
+
+
 _DEADLINE_CONTEXT_RE = re.compile(
     r"(?:"
     r"신청\s*기간|신청\s*마감|신청\s*기한|"
@@ -186,6 +278,45 @@ def extract_deadline(text: str, notice_date: str | None = None) -> str | None:
                 if date:
                     return date
     return None
+
+
+def extract_deadline_time(
+    text: str,
+    deadline: str | None = None,
+    notice_date: str | None = None,
+) -> str | None:
+    """명시된 마감시간을 HH:MM 형식으로 추출. 날짜만 있으면 None."""
+    deadline = deadline or extract_deadline(text, notice_date)
+    if not deadline:
+        return None
+
+    reference_date = _parse_reference_date(notice_date)
+    normalized = re.sub(r"\s+", " ", text)
+    records = _extract_datetime_records(normalized, reference_date)
+    candidates = [record for record in records if record[2] == deadline and record[3]]
+    if not candidates:
+        return None
+
+    for start, end, _, parsed_time in reversed(candidates):
+        before = normalized[max(0, start - 90):start]
+        after = normalized[end:min(len(normalized), end + 40)]
+        if re.search(r"(?:까지|마감|기한|종료)", after):
+            return parsed_time
+        if _DEADLINE_CONTEXT_RE.search(before):
+            return parsed_time
+
+    return None
+
+
+def extract_deadline_info(text: str, notice_date: str | None = None) -> dict:
+    """마감일, 마감시간, 한국시간 기준 마감일시를 함께 추출."""
+    deadline = extract_deadline(text, notice_date)
+    deadline_time = extract_deadline_time(text, deadline, notice_date)
+    return {
+        "deadline": deadline,
+        "deadline_time": deadline_time,
+        "deadline_at": _build_deadline_at(deadline, deadline_time),
+    }
 
 
 # ── 지원 대상 추출 (regex) ────────────────────────────────
@@ -252,8 +383,9 @@ def extract_key_info(
     texts.extend(att_texts)
     combined = "\n".join(texts)
 
+    deadline_info = extract_deadline_info(combined, notice_date)
     result = {
-        "deadline": extract_deadline(combined, notice_date),
+        **deadline_info,
         "target": extract_target(combined),
         "apply_method": extract_apply_method(combined),
     }
@@ -262,6 +394,7 @@ def extract_key_info(
         log.info(
             f"  [regex] 핵심정보 추출 — "
             f"마감:{result['deadline']} | "
+            f"시간:{result['deadline_time']} | "
             f"대상:{result['target']} | "
             f"신청:{result['apply_method']}"
         )
@@ -286,6 +419,7 @@ def _build_prompt(text: str) -> str:
 출력 형식:
 {{
   "deadline": "마감일이 있으면 YYYY-MM-DD 형식, 없으면 null",
+  "deadline_time": "마감시간이 명시되어 있으면 HH:MM 형식, 없으면 null",
   "target": "지원/신청 대상을 40자 이내로, 없으면 null",
   "apply_method": "신청 방법을 60자 이내로, 없으면 null"
 }}
@@ -318,6 +452,11 @@ def _build_prompt(text: str) -> str:
     "내일" → {today}의 다음 날
     "N일 이내" / "N일 내" → {today} + N일
 - 날짜 범위: "YYYY.MM.DD ~ YYYY.MM.DD" → 끝 날짜 사용
+- 명시된 마감시간이 있으면 deadline_time으로 반환
+  예: "2026.5.24 16:00까지" → deadline=2026-05-24, deadline_time=16:00
+  예: "2026년 5월 24일 오후 4시 마감" → deadline=2026-05-24, deadline_time=16:00
+  예: "2026.5.1 09:00 ~ 2026.5.24 18:00" → deadline=2026-05-24, deadline_time=18:00
+- 시간이 행사 진행 시간일 뿐 마감시간이 아니면 deadline_time은 null
 
 [신청 마감 vs 행사 일시가 함께 있을 때]
 공지에 신청 마감일과 행사 개최일이 모두 있으면 반드시 신청 마감일을 사용.
@@ -343,6 +482,7 @@ def _build_prompt(text: str) -> str:
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TIME_VALUE_RE = re.compile(r"^\d{2}:\d{2}$")
 
 
 def _parse_ai_response(raw: str) -> dict:
@@ -365,8 +505,21 @@ def _parse_ai_response(raw: str) -> dict:
         except ValueError:
             deadline = None
 
+    deadline_time = data.get("deadline_time") or None
+    if deadline_time is not None and not _TIME_VALUE_RE.match(deadline_time):
+        log.debug(f"  [AI] deadline_time 포맷 불일치, null 처리: {deadline_time!r}")
+        deadline_time = None
+    if deadline_time is not None:
+        try:
+            parsed = _parse_time(None, deadline_time[:2], deadline_time[3:])
+        except Exception:
+            parsed = None
+        deadline_time = parsed
+
     return {
         "deadline": deadline,
+        "deadline_time": deadline_time,
+        "deadline_at": _build_deadline_at(deadline, deadline_time),
         "target": data.get("target") or None,
         "apply_method": data.get("apply_method") or None,
     }
@@ -392,6 +545,7 @@ def _ai_extract(text: str, api_key: str, model_name: str) -> dict | None:
         log.info(
             f"  [AI] 핵심정보 추출 — "
             f"마감:{result['deadline']} | "
+            f"시간:{result['deadline_time']} | "
             f"대상:{result['target']} | "
             f"신청:{result['apply_method']}"
         )
@@ -421,7 +575,7 @@ def extract_key_info_with_ai(
            AI 결과가 있으면 우선 사용, null이면 regex 결과 유지
 
     Returns:
-        {deadline, target, apply_method}
+        {deadline, deadline_time, deadline_at, target, apply_method}
     """
     regex_result = extract_key_info(
         body_text,
@@ -447,8 +601,18 @@ def extract_key_info_with_ai(
     if ai_result is None:
         return regex_result
 
+    deadline = ai_result["deadline"] if ai_result["deadline"] is not None else regex_result["deadline"]
+    if ai_result["deadline"] == deadline and ai_result["deadline_time"] is not None:
+        deadline_time = ai_result["deadline_time"]
+    elif regex_result["deadline"] == deadline:
+        deadline_time = regex_result["deadline_time"]
+    else:
+        deadline_time = None
+
     merged = {
-        "deadline":     ai_result["deadline"]     if ai_result["deadline"]     is not None else regex_result["deadline"],
+        "deadline": deadline,
+        "deadline_time": deadline_time,
+        "deadline_at": _build_deadline_at(deadline, deadline_time),
         "target":       ai_result["target"]       if ai_result["target"]       is not None else regex_result["target"],
         "apply_method": ai_result["apply_method"] if ai_result["apply_method"] is not None else regex_result["apply_method"],
     }

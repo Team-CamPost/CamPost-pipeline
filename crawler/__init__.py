@@ -148,6 +148,8 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                     "hash": h,
                     "crawled_at": datetime.now(timezone.utc).isoformat(),
                     "deadline": key_info["deadline"],
+                    "deadline_time": key_info["deadline_time"],
+                    "deadline_at": key_info["deadline_at"],
                     "target": key_info["target"],
                     "apply_method": key_info["apply_method"],
                 }
@@ -276,7 +278,13 @@ def run_startup_reextract() -> None:
                     data.update(content_payload)
                     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
                     content_updated += 1
-        if not (data.get("deadline") is not None and data.get("target") is not None and data.get("apply_method") is not None):
+        if not (
+            data.get("deadline") is not None
+            and "deadline_time" in data
+            and "deadline_at" in data
+            and data.get("target") is not None
+            and data.get("apply_method") is not None
+        ):
             body_text = data.get("body_text") or ""
             if body_text or any(a.get("extracted_text") for a in attachments if isinstance(a, dict)):
                 todo.append(path)
@@ -300,6 +308,8 @@ def run_startup_reextract() -> None:
             continue
 
         old_deadline     = data.get("deadline")
+        old_deadline_time = data.get("deadline_time")
+        old_deadline_at = data.get("deadline_at")
         old_target       = data.get("target")
         old_apply_method = data.get("apply_method")
 
@@ -327,13 +337,29 @@ def run_startup_reextract() -> None:
             continue
 
         new_deadline     = old_deadline     if old_deadline     is not None else result["deadline"]
+        new_deadline_time = old_deadline_time if "deadline_time" in data else result["deadline_time"]
+        new_deadline_at = old_deadline_at if "deadline_at" in data else result["deadline_at"]
         new_target       = old_target       if old_target       is not None else result["target"]
         new_apply_method = old_apply_method if old_apply_method is not None else result["apply_method"]
 
-        if (new_deadline, new_target, new_apply_method) == (old_deadline, old_target, old_apply_method):
+        if (
+            new_deadline,
+            new_deadline_time,
+            new_deadline_at,
+            new_target,
+            new_apply_method,
+        ) == (
+            old_deadline,
+            old_deadline_time,
+            old_deadline_at,
+            old_target,
+            old_apply_method,
+        ):
             continue
 
         data["deadline"]     = new_deadline
+        data["deadline_time"] = new_deadline_time
+        data["deadline_at"] = new_deadline_at
         data["target"]       = new_target
         data["apply_method"] = new_apply_method
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

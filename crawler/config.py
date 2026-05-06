@@ -125,7 +125,7 @@ FILES_DIR.mkdir(parents=True, exist_ok=True)
 RAW_STORE_DIR = OUTPUT_DIR / "raw"
 RAW_STORE_DIR.mkdir(parents=True, exist_ok=True)
 
-EXTRACTABLE_EXTS = {"pdf", "hwp", "hwpx"}
+EXTRACTABLE_EXTS = {"pdf", "hwp", "hwpx", "docx"}
 
 # ── DB 연결 (crawl_jobs / parse_logs 쓰기 전용) ──────────
 DB_HOST = os.getenv("DB_HOST", "db")
