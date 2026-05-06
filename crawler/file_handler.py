@@ -12,7 +12,6 @@ import logging
 import mimetypes
 import re
 import zipfile
-from collections import defaultdict
 from pathlib import Path
 from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
@@ -23,8 +22,10 @@ from .config import EXTRACTABLE_EXTS, FILES_DIR, USER_AGENT
 
 mimetypes.add_type("application/x-hwp", ".hwp")
 mimetypes.add_type("application/x-hwpx", ".hwpx")
+mimetypes.add_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx")
 
 log = logging.getLogger("campost.file_handler")
+logging.getLogger("hwp5").setLevel(logging.WARNING)
 
 _MAX_INLINE_IMAGES = 10
 _MAX_INLINE_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
@@ -115,79 +116,20 @@ def _extract_hwp_pyhwp(path: Path) -> str:
         log.debug(f"HWP pyhwp 파일 열기/섹션 수집 실패 ({path.name}): {exc}")
         return ""
 
+    # Collect all body paragraph text. On the CAMPOST HWP sample set this was
+    # more complete than reconstructing table state, which dropped text in
+    # table-heavy notices.
     result_parts: list[str] = []
-    in_table = False
-    current_cell: tuple[int, int] | None = None
-    cell_data: dict[tuple[int, int], list[str]] = {}
-
-    def flush_table() -> str:
-        if not cell_data:
-            return ""
-        # pyhwp는 colspan/rowspan으로 가려진 ghost 셀을 저장하지 않는다.
-        # 실제 LIST_HEADER 엔트리가 있는 셀만 row별로 모아 출력하면
-        # 빈 "|  |" 가 생기지 않는다.
-        rows_dict: dict[int, list[tuple[int, str]]] = defaultdict(list)
-        for (r, c), lines in cell_data.items():
-            text = " / ".join(line for line in lines if line.strip())
-            rows_dict[r].append((c, text))
-
-        out_lines = []
-        for i, r in enumerate(sorted(rows_dict)):
-            cells = [text for _, text in sorted(rows_dict[r])]
-            row_text = " | ".join(cells)
-            out_lines.append(row_text)
-            if i == 0:
-                out_lines.append("-" * max(40, len(row_text)))
-        return "\n".join(out_lines)
-
     try:
         for m in models:
-            tagname = m.get("tagname", "")
-            level   = m.get("level", 0)
-            content = m.get("content", {})
-            chunks  = content.get("chunks", [])
-
-            if tagname == "HWPTAG_CTRL_HEADER" and content.get("chid") == "tbl ":
-                in_table = True
-                current_cell = None
-                cell_data = {}
+            if m.get("tagname") != "HWPTAG_PARA_TEXT":
                 continue
-
-            if in_table and tagname == "HWPTAG_TABLE":
-                continue
-
-            if in_table:
-                if level <= 1 and tagname in ("HWPTAG_PARA_HEADER", "HWPTAG_CTRL_HEADER"):
-                    table_text = flush_table()
-                    if table_text:
-                        result_parts.append("[표]\n" + table_text)
-                    in_table = False
-                    current_cell = None
-                    cell_data = {}
-                elif tagname == "HWPTAG_LIST_HEADER" and level == 2:
-                    row, col = content.get("row", 0), content.get("col", 0)
-                    current_cell = (row, col)
-                    cell_data.setdefault(current_cell, [])
-                    continue
-                elif tagname == "HWPTAG_PARA_TEXT" and level == 3 and current_cell is not None:
-                    text = _get_para_text_from_chunks(chunks).strip()
-                    if text:
-                        cell_data[current_cell].append(text)
-                    continue
-                else:
-                    continue
-
-            if tagname == "HWPTAG_PARA_TEXT" and level == 1:
-                text = _get_para_text_from_chunks(chunks).strip()
-                if text:
-                    result_parts.append(text)
+            text = _get_para_text_from_chunks(m.get("content", {}).get("chunks", [])).strip()
+            if text:
+                result_parts.append(text)
     except Exception as exc:
-        log.warning(f"HWP pyhwp 모델 순회 중 오류 ({path.name}): {exc}")
-
-    if in_table:
-        table_text = flush_table()
-        if table_text:
-            result_parts.append("[표]\n" + table_text)
+        log.warning(f"HWP pyhwp BodyText 순회 실패 ({path.name}): {exc}")
+        return ""
 
     return "\n".join(result_parts)
 
@@ -201,6 +143,9 @@ def _extract_hwp(path: Path) -> tuple[str, str]:
     두 결과 중 긴 쪽을 반환. 둘 다 빈 문자열이면 ("", "none") 반환.
     """
     pyhwp_text = _extract_hwp_pyhwp(path)
+    if pyhwp_text:
+        log.debug(f"HWP pyhwp BodyText 사용: {len(pyhwp_text)}자")
+        return pyhwp_text, "pyhwp_bodytext"
 
     prvtext = ""
     try:
@@ -217,12 +162,8 @@ def _extract_hwp(path: Path) -> tuple[str, str]:
         log.debug(f"HWP 텍스트 추출 결과 없음 ({path.name})")
         return "", "none"
 
-    if pyhwp_text and len(pyhwp_text) >= len(prvtext):
-        log.debug(f"HWP pyhwp 사용: {len(pyhwp_text)}자 (PrvText={len(prvtext)}자)")
-        return pyhwp_text, "pyhwp"
-
-    log.debug(f"HWP PrvText 사용: {len(prvtext)}자 (pyhwp={len(pyhwp_text)}자)")
-    return prvtext, "olefile"
+    log.debug(f"HWP PrvText fallback 사용: {len(prvtext)}자")
+    return prvtext, "olefile_prvtext"
 
 
 def _extract_hwpx(path: Path) -> tuple[str, str]:
@@ -246,6 +187,65 @@ def _extract_hwpx(path: Path) -> tuple[str, str]:
         return "", "hwpx_xml"
 
 
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _extract_docx_xml_text(raw_xml: bytes) -> str:
+    root = ET.fromstring(raw_xml)
+    paragraphs: list[str] = []
+
+    for paragraph in root.iter():
+        if _xml_local_name(paragraph.tag) != "p":
+            continue
+
+        parts: list[str] = []
+        for el in paragraph.iter():
+            name = _xml_local_name(el.tag)
+            if name == "t" and el.text:
+                parts.append(el.text)
+            elif name == "tab":
+                parts.append("\t")
+            elif name in {"br", "cr"}:
+                parts.append("\n")
+
+        text = "".join(parts).strip()
+        if text:
+            paragraphs.append(text)
+
+    return "\n".join(paragraphs)
+
+
+def _extract_docx(path: Path) -> tuple[str, str]:
+    """DOCX(ZIP+WordprocessingML) text extraction."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            text_parts: list[str] = []
+
+            xml_files = ["word/document.xml"]
+            xml_files.extend(
+                sorted(
+                    name
+                    for name in names
+                    if re.fullmatch(r"word/(header|footer)\d+\.xml", name)
+                    or name in {"word/footnotes.xml", "word/endnotes.xml", "word/comments.xml"}
+                )
+            )
+
+            for xml_file in xml_files:
+                if xml_file not in names:
+                    continue
+                text = _extract_docx_xml_text(z.read(xml_file)).strip()
+                if text:
+                    text_parts.append(text)
+
+        return "\n".join(text_parts).strip(), "docx_xml"
+    except Exception as exc:
+        log.warning(f"DOCX parsing failed ({path.name}): {exc}")
+        return "", "docx_xml"
+
+
 def extract_text(path: Path, ext: str) -> tuple[str, str]:
     """
     파일 텍스트 추출.
@@ -257,6 +257,8 @@ def extract_text(path: Path, ext: str) -> tuple[str, str]:
         return _extract_hwp(path)
     if ext == "hwpx":
         return _extract_hwpx(path)
+    if ext == "docx":
+        return _extract_docx(path)
     return "", "none"
 
 
@@ -401,6 +403,13 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
                 f"→ {len(extracted_text)}자 (parser={parser})"
             )
 
+        parse_quality = (
+            "full"
+            if parser in {"pyhwp_bodytext", "pdfplumber", "hwpx_xml", "docx_xml"}
+            else "preview"
+            if parser == "olefile_prvtext"
+            else "none"
+        )
         file_key = filename
         checksum = _compute_checksum(save_path) if download_ok else None
         file_size = save_path.stat().st_size if download_ok else None
@@ -415,8 +424,10 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
                 "file_size": file_size,
                 "checksum": checksum,
                 "extracted_text": extracted_text,
+                "extracted_chars": len(extracted_text),
                 "download_ok": download_ok,
                 "parser": parser,
+                "parse_quality": parse_quality,
                 "parse_ok": parse_ok,
             }
         )
