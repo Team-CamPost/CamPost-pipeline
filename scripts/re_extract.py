@@ -23,6 +23,12 @@ CONTENT_FIELDS = {"content_html", "content_assets", "content_stats"}
 ALLOWED_FIELDS = KEY_INFO_FIELDS | CONTENT_FIELDS
 
 
+def _build_deadline_at(deadline: str | None, deadline_time: str | None) -> str | None:
+    if not deadline or not deadline_time:
+        return None
+    return f"{deadline}T{deadline_time}:00+09:00"
+
+
 def _preview(value: object, limit: int = 80) -> str:
     text = str(value)[:limit]
     encoding = sys.stdout.encoding or "utf-8"
@@ -103,6 +109,13 @@ def re_extract(
             for key in KEY_INFO_FIELDS:
                 old[key] = data.get(key)
                 result[key] = extracted[key] if key in fields else old[key]
+
+            if fields & {"deadline", "deadline_time"}:
+                old["deadline_at"] = data.get("deadline_at")
+                result["deadline_at"] = _build_deadline_at(
+                    result.get("deadline"),
+                    result.get("deadline_time"),
+                )
 
         if wants_content:
             content_payload = build_content_payload(body_html, attachments)

@@ -28,15 +28,20 @@ def bodytext_text(path: Path) -> str:
     if Hwp5File is None:
         return ""
     hw = Hwp5File(str(path))
-    parts: list[str] = []
-    for section in hw.bodytext.sections:
-        for model in section.models():
-            if model.get("tagname") != "HWPTAG_PARA_TEXT":
-                continue
-            text = para_text_from_chunks(model.get("content", {}).get("chunks", [])).strip()
-            if text:
-                parts.append(text)
-    return "\n".join(parts)
+    try:
+        parts: list[str] = []
+        for section in hw.bodytext.sections:
+            for model in section.models():
+                if model.get("tagname") != "HWPTAG_PARA_TEXT":
+                    continue
+                text = para_text_from_chunks(model.get("content", {}).get("chunks", [])).strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(parts)
+    finally:
+        close = getattr(hw, "close", None)
+        if callable(close):
+            close()
 
 
 def prvtext_text(path: Path) -> str:
@@ -91,22 +96,35 @@ def quantiles(values: list[float]) -> dict[str, float | None]:
     }
 
 
+def resolve_local_path(root: Path, local_path: str) -> Path:
+    rel = local_path.replace("\\", "/")
+    if rel.startswith("files/"):
+        return root / rel
+    path = Path(rel)
+    if path.is_absolute():
+        return path
+    return root / "files" / path.name
+
+
 def main() -> None:
     root = Path("/data") if Path("/data/raw").exists() else Path("data")
     raw_dir = root / "raw"
-    files_dir = root / "files"
 
     rows: list[dict] = []
     errors: list[dict] = []
 
     for raw_path in sorted(raw_dir.glob("*.json")):
-        data = json.loads(raw_path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(raw_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            errors.append({"notice": raw_path.stem, "name": raw_path.name, "error": f"json_error: {exc}"})
+            continue
         notice_id = data.get("id") or raw_path.stem
         for attachment in data.get("attachments") or []:
             if (attachment.get("ext") or "").lower() != "hwp":
                 continue
             local_path = attachment.get("local_path") or ""
-            path = files_dir / Path(local_path).name
+            path = resolve_local_path(root, local_path)
             if not path.exists():
                 errors.append({"notice": notice_id, "name": attachment.get("name"), "error": "missing_file"})
                 continue
