@@ -44,6 +44,10 @@ def _compute_checksum(path: Path) -> str:
     return sha256.hexdigest()
 
 
+def _is_reusable_download(path: Path) -> bool:
+    return path.is_file() and path.stat().st_size > 0
+
+
 def _get_mime_type(filename: str) -> str:
     mime, _ = mimetypes.guess_type(filename)
     return mime or "application/octet-stream"
@@ -389,7 +393,13 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
         filename = _safe_filename(article_id, att["name"])
         save_path = FILES_DIR / filename
 
-        download_ok = await download_file(att["url"], save_path)
+        download_cached = False
+        if _is_reusable_download(save_path):
+            download_ok = True
+            download_cached = True
+            log.debug(f"Download cache hit: {save_path.name} ({save_path.stat().st_size:,} bytes)")
+        else:
+            download_ok = await download_file(att["url"], save_path)
 
         extracted_text = ""
         parser = "none"
@@ -426,6 +436,7 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
                 "extracted_text": extracted_text,
                 "extracted_chars": len(extracted_text),
                 "download_ok": download_ok,
+                "download_cached": download_cached,
                 "parser": parser,
                 "parse_quality": parse_quality,
                 "parse_ok": parse_ok,
