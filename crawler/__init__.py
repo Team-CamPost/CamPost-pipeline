@@ -26,6 +26,17 @@ from .content import build_content_payload
 from .db import create_crawl_job, finish_crawl_job, log_parse
 from .extractor import extract_key_info_with_ai
 from .file_handler import extract_external_images, extract_inline_images, process_attachments
+from .reprocess import (
+    CONTENT_PAYLOAD_VERSION,
+    KEY_INFO_BACKFILL_VERSION,
+    KEY_INFO_EXTRACTION_VERSION,
+    build_deadline_at,
+    needs_content_backfill,
+    needs_key_info_backfill,
+    stamp_content,
+    stamp_key_info_backfill,
+    stamp_reprocessed_at,
+)
 from .scraper import fetch_detail, fetch_list
 from .storage import compute_hash, load_seen_hashes, save_raw_json, save_seen_hashes
 
@@ -152,6 +163,9 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                     "deadline_at": key_info["deadline_at"],
                     "target": key_info["target"],
                     "apply_method": key_info["apply_method"],
+                    "key_info_extraction_version": KEY_INFO_EXTRACTION_VERSION,
+                    "key_info_backfill_version": KEY_INFO_BACKFILL_VERSION,
+                    "content_version": CONTENT_PAYLOAD_VERSION,
                 }
 
                 save_raw_json(notice)
@@ -243,9 +257,10 @@ async def run_all() -> None:
 
 def run_startup_reextract() -> None:
     """
-    컨테이너 시작 시 기존 raw JSON 중 null 필드가 있는 파일을 현재 extractor로 재처리.
+    컨테이너 시작 시 기존 raw JSON 중 재처리 버전이 없는 파일을 현재 extractor로 재처리.
     변경된 파일은 덮어써서 Importer가 자동으로 DB를 갱신하게 한다.
-    기존 값은 보존하고 null 필드만 채운다.
+    기존 값은 보존하고 null 필드만 채운다. deadline_time/deadline_at null은 정상일 수
+    있으므로 처리 완료 여부는 버전 필드로 판단한다.
 
     AI 호출 간 4초 딜레이로 Gemini free tier RPM(15회/분) 초과를 방지한다.
     """
@@ -256,7 +271,7 @@ def run_startup_reextract() -> None:
     if not files:
         return
 
-    # null 필드가 있는 파일만 추려서 처리 대상 파악
+    # 버전 필드 기준으로 처리 대상을 판단한다. null 값 자체는 정상 결과일 수 있다.
     backfill_content = _env_flag("CAMPOST_BACKFILL_CONTENT_ON_STARTUP")
     todo = []
     content_updated = 0
@@ -268,26 +283,20 @@ def run_startup_reextract() -> None:
             continue
         raw_attachments = data.get("attachments") or []
         attachments = raw_attachments if isinstance(raw_attachments, list) else []
-        if backfill_content:
+        if backfill_content and needs_content_backfill(data):
             try:
                 content_payload = build_content_payload(data.get("body_html") or "", attachments)
             except Exception as exc:
                 log.warning(f"[startup] {path.name} content_html generation failed: {exc}")
             else:
-                if any(data.get(k) != v for k, v in content_payload.items()):
+                if any(data.get(k) != v for k, v in content_payload.items()) or needs_content_backfill(data):
                     data.update(content_payload)
+                    stamp_content(data)
+                    stamp_reprocessed_at(data)
                     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
                     content_updated += 1
-        if not (
-            data.get("deadline") is not None
-            and data.get("deadline_time") is not None
-            and data.get("deadline_at") is not None
-            and data.get("target") is not None
-            and data.get("apply_method") is not None
-        ):
-            body_text = data.get("body_text") or ""
-            if body_text or any(a.get("extracted_text") for a in attachments if isinstance(a, dict)):
-                todo.append(path)
+        if needs_key_info_backfill(data):
+            todo.append(path)
 
     if content_updated:
         log.info(f"[startup] content_html updated: {content_updated}")
@@ -296,7 +305,7 @@ def run_startup_reextract() -> None:
         log.info(f"[startup] 재추출 불필요 — {len(files)}개 파일 이미 최신 상태")
         return
 
-    log.info(f"[startup] null 필드 있는 파일 {len(todo)}개 재추출 시작 (AI 간 4초 딜레이)")
+    log.info(f"[startup] key-info backfill 대상 {len(todo)}개 재추출 시작 (AI 간 4초 딜레이)")
     updated = 0
     ai_call_count = 0
 
@@ -336,11 +345,20 @@ def run_startup_reextract() -> None:
             log.warning(f"[startup] {path.stem} 추출 실패: {exc}")
             continue
 
-        new_deadline     = old_deadline     if old_deadline     is not None else result["deadline"]
+        new_deadline = old_deadline if old_deadline is not None else result["deadline"]
         new_deadline_time = old_deadline_time if old_deadline_time is not None else result["deadline_time"]
-        new_deadline_at = old_deadline_at if old_deadline_at is not None else result["deadline_at"]
-        new_target       = old_target       if old_target       is not None else result["target"]
+        computed_deadline_at = build_deadline_at(new_deadline, new_deadline_time)
+        new_deadline_at = old_deadline_at if old_deadline_at is not None else computed_deadline_at
+        new_target = old_target if old_target is not None else result["target"]
         new_apply_method = old_apply_method if old_apply_method is not None else result["apply_method"]
+
+        data["deadline"]     = new_deadline
+        data["deadline_time"] = new_deadline_time
+        data["deadline_at"] = new_deadline_at
+        data["target"]       = new_target
+        data["apply_method"] = new_apply_method
+        stamp_key_info_backfill(data)
+        stamp_reprocessed_at(data)
 
         if (
             new_deadline,
@@ -355,13 +373,9 @@ def run_startup_reextract() -> None:
             old_target,
             old_apply_method,
         ):
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             continue
 
-        data["deadline"]     = new_deadline
-        data["deadline_time"] = new_deadline_time
-        data["deadline_at"] = new_deadline_at
-        data["target"]       = new_target
-        data["apply_method"] = new_apply_method
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         updated += 1
         log.info(

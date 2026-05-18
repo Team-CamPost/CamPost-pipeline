@@ -17,16 +17,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from crawler.config import GEMINI_API_KEY, GEMINI_MODEL, OUTPUT_DIR
 from crawler.content import build_content_payload
 from crawler.extractor import extract_key_info_with_ai
+from crawler.reprocess import (
+    CONTENT_FIELDS,
+    CONTENT_PAYLOAD_VERSION,
+    CONTENT_VERSION_FIELD,
+    KEY_INFO_BACKFILL_VERSION,
+    KEY_INFO_BACKFILL_VERSION_FIELD,
+    KEY_INFO_EXTRACTION_VERSION,
+    KEY_INFO_FIELDS,
+    KEY_INFO_VERSION_FIELD,
+    build_deadline_at,
+    stamp_content,
+    stamp_key_info_backfill,
+    stamp_key_info_extraction,
+    stamp_reprocessed_at,
+)
 
-KEY_INFO_FIELDS = {"deadline", "deadline_time", "deadline_at", "target", "apply_method"}
-CONTENT_FIELDS = {"content_html", "content_assets", "content_stats"}
 ALLOWED_FIELDS = KEY_INFO_FIELDS | CONTENT_FIELDS
-
-
-def _build_deadline_at(deadline: str | None, deadline_time: str | None) -> str | None:
-    if not deadline or not deadline_time:
-        return None
-    return f"{deadline}T{deadline_time}:00+09:00"
 
 
 def _preview(value: object, limit: int = 80) -> str:
@@ -112,19 +119,33 @@ def re_extract(
 
             if fields & {"deadline", "deadline_time"}:
                 old["deadline_at"] = data.get("deadline_at")
-                result["deadline_at"] = _build_deadline_at(
+                result["deadline_at"] = build_deadline_at(
                     result.get("deadline"),
                     result.get("deadline_time"),
                 )
+
+            if only_null:
+                old[KEY_INFO_BACKFILL_VERSION_FIELD] = data.get(KEY_INFO_BACKFILL_VERSION_FIELD)
+                result[KEY_INFO_BACKFILL_VERSION_FIELD] = KEY_INFO_BACKFILL_VERSION
+            else:
+                old[KEY_INFO_VERSION_FIELD] = data.get(KEY_INFO_VERSION_FIELD)
+                old[KEY_INFO_BACKFILL_VERSION_FIELD] = data.get(KEY_INFO_BACKFILL_VERSION_FIELD)
+                result[KEY_INFO_VERSION_FIELD] = KEY_INFO_EXTRACTION_VERSION
+                result[KEY_INFO_BACKFILL_VERSION_FIELD] = KEY_INFO_BACKFILL_VERSION
 
         if wants_content:
             content_payload = build_content_payload(body_html, attachments)
             for key in CONTENT_FIELDS:
                 old[key] = data.get(key)
                 result[key] = content_payload[key] if key in fields else old[key]
+            old[CONTENT_VERSION_FIELD] = data.get(CONTENT_VERSION_FIELD)
+            result[CONTENT_VERSION_FIELD] = CONTENT_PAYLOAD_VERSION
 
         if only_null:
-            result = {key: value if old[key] is None else old[key] for key, value in result.items()}
+            result = {
+                key: value if old[key] is None or key.endswith("_version") else old[key]
+                for key, value in result.items()
+            }
 
         changed = {key for key in old if old[key] != result[key]}
         if not changed:
@@ -140,6 +161,14 @@ def re_extract(
         if not dry_run:
             for key, value in result.items():
                 data[key] = value
+            if wants_key_info:
+                if only_null:
+                    stamp_key_info_backfill(data)
+                else:
+                    stamp_key_info_extraction(data)
+            if wants_content:
+                stamp_content(data)
+            stamp_reprocessed_at(data)
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
         updated += 1
