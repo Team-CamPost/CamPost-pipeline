@@ -137,19 +137,19 @@ def _parse_short_date(month: str, day: str, reference_date: date | None) -> str 
     return candidate.isoformat()
 
 
-def _extract_dates(text: str, reference_date: date | None) -> list[tuple[int, str]]:
+def _extract_date_spans(text: str, reference_date: date | None) -> list[tuple[int, int, str]]:
     full_pattern = re.compile(
         r"(\d{4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*(?:일)?"
     )
     short_pattern = re.compile(r"(?<!\d)(\d{1,2})\s*(?:[./]|월)\s*(\d{1,2})\s*(?:일)?")
 
-    dates: list[tuple[int, str]] = []
+    dates: list[tuple[int, int, str]] = []
     occupied: list[tuple[int, int]] = []
 
     for match in full_pattern.finditer(text):
         parsed = _parse_date(match.group(1), match.group(2), match.group(3))
         if parsed:
-            dates.append((match.start(), parsed))
+            dates.append((match.start(), match.end(), parsed))
             occupied.append(match.span())
 
     def overlaps_full_date(span: tuple[int, int]) -> bool:
@@ -160,9 +160,50 @@ def _extract_dates(text: str, reference_date: date | None) -> list[tuple[int, st
             continue
         parsed = _parse_short_date(match.group(1), match.group(2), reference_date)
         if parsed:
-            dates.append((match.start(), parsed))
+            dates.append((match.start(), match.end(), parsed))
 
     return sorted(dates, key=lambda item: item[0])
+
+
+def _extract_dates(text: str, reference_date: date | None) -> list[tuple[int, str]]:
+    return [(start, parsed) for start, _end, parsed in _extract_date_spans(text, reference_date)]
+
+
+_APPLICATION_RANGE_CONTEXT_RE = re.compile(
+    r"(?:"
+    r"신청\s*접수|신청\s*기간|신청\s*마감|신청\s*기한|"
+    r"접수\s*기간|접수\s*마감|접수\s*기한|접수\s*종료|"
+    r"모집\s*기간|모집\s*마감|모집\s*기한|"
+    r"지원\s*기간|지원\s*마감|지원\s*기한|"
+    r"제출\s*기간|제출\s*마감|제출\s*기한|"
+    r"등록\s*기간|등록\s*마감|"
+    r"참가\s*신청|참가\s*접수|참가자\s*신청|참가자\s*접수|"
+    r"참가신청서|온라인\s*참가신청서|"
+    r"응답\s*기한|설문\s*기간|수강\s*기간(?:\s*연장)?|단체\s*접수"
+    r")"
+)
+
+
+def _first_application_date_range_end(text: str, reference_date: date | None) -> str | None:
+    dates = _extract_date_spans(text, reference_date)
+    if len(dates) < 2:
+        return None
+
+    for first, second in zip(dates, dates[1:]):
+        gap = text[first[1]:second[0]]
+        before = text[max(0, first[0] - 80):first[0]]
+        after = text[second[1]:min(len(text), second[1] + 80)]
+        if (
+            len(gap) <= 24
+            and re.search(r"[~\-–]", gap)
+            and (
+                _APPLICATION_RANGE_CONTEXT_RE.search(before)
+                or re.search(r"기간\s*내.*(?:참가신청서|신청서)\s*제출", after)
+            )
+        ):
+            return second[2]
+
+    return None
 
 
 _TIME_RE = (
@@ -223,15 +264,114 @@ def _extract_datetime_records(
 
 _DEADLINE_CONTEXT_RE = re.compile(
     r"(?:"
-    r"신청\s*기간|신청\s*마감|신청\s*기한|"
+    r"신청\s*기간|신청\s*마감|신청\s*기한|신청\s*접수|"
+    r"지원\s*기간|지원\s*마감|지원\s*기한|지원\s*방법|"
     r"접수\s*기간|접수\s*마감|접수\s*기한|접수\s*종료|"
     r"모집\s*기간|모집\s*마감|모집\s*기한|"
     r"제출\s*기간|제출\s*마감|제출\s*기한|"
     r"응답\s*기한|설문\s*기간|수강\s*기간(?:\s*연장)?|"
-    r"등록\s*기간|등록\s*마감|참가\s*신청|단체\s*접수|"
+    r"등록\s*기간|등록\s*마감|참가\s*신청|참가\s*접수|"
+    r"참가자\s*신청|참가자\s*접수|참가신청서|단체\s*접수|"
     r"마감일|기한"
     r")"
 )
+
+_EVENT_DATETIME_CONTEXT_RE = re.compile(
+    r"(?:"
+    r"행사\s*일시|교육\s*일시|운영\s*일시|개최\s*일시|"
+    r"설명회\s*일시|세미나\s*일시|박람회\s*일시|일\s*시"
+    r")"
+)
+
+_EVENT_TIME_VALUE_RE = re.compile(
+    r"(?:(오전|오후|AM|PM|am|pm)\s*)?"
+    r"(\d{1,2})"
+    r"(?::(\d{2})|시\s*(?:(\d{1,2})분?)?)"
+)
+
+
+def _extract_event_deadline_from_context(
+    text: str,
+    reference_date: date | None,
+) -> tuple[str, str | None] | None:
+    normalized = re.sub(r"\s+", " ", text)
+    date_pattern = re.compile(
+        r"(\d{4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*(?:일)?"
+        r"(?:\.)?"
+        r"(?:\([월화수목금토일]\))?"
+        r"(?:\.|\))?"
+    )
+
+    for context_match in _EVENT_DATETIME_CONTEXT_RE.finditer(normalized):
+        snippet = normalized[context_match.start():min(len(normalized), context_match.end() + 160)]
+        date_match = date_pattern.search(snippet)
+        if date_match:
+            parsed_date = _parse_date(date_match.group(1), date_match.group(2), date_match.group(3))
+            after_date = snippet[date_match.end():min(len(snippet), date_match.end() + 50)]
+        else:
+            dates = _extract_dates(snippet, reference_date)
+            if not dates:
+                continue
+            parsed_date = dates[0][1]
+            after_date = snippet[dates[0][0]:min(len(snippet), dates[0][0] + 80)]
+
+        times = list(_EVENT_TIME_VALUE_RE.finditer(after_date))
+        parsed_time = None
+        if len(times) >= 2 and re.search(r"[~\-–]\s*$", after_date[times[0].end():times[1].start()]):
+            first_marker = times[0].group(1)
+            second_marker = times[1].group(1) or first_marker
+            parsed_time = _parse_time(
+                second_marker,
+                times[1].group(2),
+                times[1].group(3),
+                times[1].group(4),
+            )
+
+        if parsed_date:
+            return parsed_date, parsed_time
+
+    return None
+
+
+def _has_application_deadline_evidence(
+    text: str,
+    candidate_deadline: str | None,
+    reference_date: date | None,
+) -> bool:
+    if not candidate_deadline:
+        return False
+
+    normalized = re.sub(r"\s+", " ", text)
+    dates = _extract_date_spans(normalized, reference_date)
+
+    for idx, current in enumerate(dates):
+        if current[2] != candidate_deadline:
+            continue
+
+        window_start = max(0, current[0] - 100)
+        window_end = min(len(normalized), current[1] + 100)
+        before = normalized[window_start:current[0]]
+        after = normalized[current[1]:window_end]
+
+        if idx > 0:
+            previous = dates[idx - 1]
+            gap = normalized[previous[1]:current[0]]
+            range_before = normalized[max(0, previous[0] - 100):previous[0]]
+            range_after = normalized[current[1]:min(len(normalized), current[1] + 100)]
+            if (
+                len(gap) <= 24
+                and re.search(r"[~\-–]", gap)
+                and (
+                    _APPLICATION_RANGE_CONTEXT_RE.search(range_before)
+                    or re.search(r"기간\s*내.*(?:참가신청서|신청서)\s*제출", range_after)
+                )
+            ):
+                return True
+
+        if _DEADLINE_CONTEXT_RE.search(before) and re.search(r"(?:까지|마감|기한|종료)", after):
+            return True
+
+    return False
 
 
 def _extract_deadline_from_context(text: str, reference_date: date | None) -> str | None:
@@ -247,6 +387,9 @@ def _extract_deadline_from_context(text: str, reference_date: date | None) -> st
                 bounded_dates = [item for item in dates if item[0] <= marker.end()]
                 if bounded_dates:
                     return bounded_dates[-1][1]
+            range_end = _first_application_date_range_end(snippet, reference_date)
+            if range_end:
+                return range_end
             return dates[-1][1]
 
     for pattern in (
@@ -277,6 +420,9 @@ def extract_deadline(text: str, notice_date: str | None = None) -> str | None:
                 date = _parse_date(groups[0], groups[1], groups[2])
                 if date:
                     return date
+    event_deadline = _extract_event_deadline_from_context(text, reference_date)
+    if event_deadline:
+        return event_deadline[0]
     return None
 
 
@@ -294,6 +440,9 @@ def extract_deadline_time(
     normalized = re.sub(r"\s+", " ", text)
     records = _extract_datetime_records(normalized, reference_date)
     candidates = [record for record in records if record[2] == deadline and record[3]]
+    event_deadline = _extract_event_deadline_from_context(text, reference_date)
+    if event_deadline and event_deadline[0] == deadline and event_deadline[1]:
+        return event_deadline[1]
     if not candidates:
         return None
 
@@ -426,16 +575,23 @@ def _build_prompt(text: str) -> str:
 
 === deadline 추출 규칙 ===
 
+[deadline의 의미]
+- deadline은 사용자가 신청·접수·지원·모집·제출·등록·응답·참가신청을 완료해야 하는 마지막 날짜입니다.
+- 단순히 행사가 열리는 날짜, 대회가 진행되는 날짜, 예선/본선/결선/시상식 날짜는 deadline이 아닙니다.
+
 [추출 우선순위 — 가장 높은 순위의 날짜 1개만 반환]
-1순위: 신청·접수·지원·모집·제출·등록·참가 마감일
-  키워드 예: "~까지", "마감", "기한", "접수 종료", "신청 마감", "모집 마감"
-2순위: 행사·아카데미·설명회·특강·세미나에서 별도 신청 마감이 없으면
-  → 행사 개최일 또는 첫 번째 행사 날짜를 deadline으로 사용
-3순위: 서비스·프로그램 이용 기간 범위의 종료일
-  예: "2026.05.01~2026.10.30" → 2026-10-30
-4순위: 대회·공모전·해커톤·챌린지에서 신청 마감이 없으면 예선 또는 첫 행사 날짜
+1순위: 신청·접수·지원·모집·제출·등록·응답·참가신청의 마감일 또는 기간 종료일
+  키워드 예: "~까지", "마감", "기한", "접수 종료", "신청 마감", "모집 마감", "신청 접수", "참가자 접수", "참가신청서 제출"
+  날짜 범위 예: "참가자 접수(5.26~7.30)" → 2026-07-30
+  날짜 범위 예: "2026.5.26.(화)~7.30.(목) 기간 내 온라인 참가신청서 제출" → 2026-07-30
+2순위: 별도 신청·접수·제출 기한이 전혀 없고, 공지가 단순 행사 참석/운영 안내이면 행사 일시의 날짜 사용
+  예: "일시: 2026.5.19 10:00~16:00" → deadline=2026-05-19, deadline_time=16:00
+3순위: 서비스·프로그램 이용 기간 자체가 신청 대상이고 별도 신청기한이 없으면 그 기간의 종료일
+  예: "이용 기간: 2026.05.01~2026.10.30" → 2026-10-30
 
 [반드시 제외 — deadline으로 쓰지 말 것]
+- 대회기간·행사기간·운영기간의 종료일. 단, 그 문장이 신청/접수/제출 기간이면 제외 아님
+- 발대식·오리엔테이션·교육일·예선·본선·결선·시상식·발표회 날짜
 - 발표일·합격자 발표·결과 발표·선정 결과 날짜
 - 공지 등록일·작성일·게시일
 - 정기 강의·수업 일정·시험 날짜 (단, 수강신청 마감은 제외 아님)
@@ -452,15 +608,20 @@ def _build_prompt(text: str) -> str:
     "내일" → {today}의 다음 날
     "N일 이내" / "N일 내" → {today} + N일
 - 날짜 범위: "YYYY.MM.DD ~ YYYY.MM.DD" → 끝 날짜 사용
+- 신청/접수/지원/제출 문맥의 연도 없는 날짜 범위도 끝 날짜 사용
+  예: "신청 접수 (5.13.(수) ~ 6.26.(금))" → 2026-06-26
 - 명시된 마감시간이 있으면 deadline_time으로 반환
   예: "2026.5.24 16:00까지" → deadline=2026-05-24, deadline_time=16:00
   예: "2026년 5월 24일 오후 4시 마감" → deadline=2026-05-24, deadline_time=16:00
   예: "2026.5.1 09:00 ~ 2026.5.24 18:00" → deadline=2026-05-24, deadline_time=18:00
-- 시간이 행사 진행 시간일 뿐 마감시간이 아니면 deadline_time은 null
+- 행사 일시 fallback을 쓰는 경우에는 시간 범위의 종료 시간을 deadline_time으로 반환
+- 신청/접수 마감이 따로 있으면 행사 진행 시간은 deadline_time으로 쓰지 말고 null
 
 [신청 마감 vs 행사 일시가 함께 있을 때]
 공지에 신청 마감일과 행사 개최일이 모두 있으면 반드시 신청 마감일을 사용.
 예: "신청: ~5/15 / 행사 일시: 6/1" → 2026-05-15
+예: "일정: 참가자 접수(5.26~7.30), 발대식(8.20), 예선(8.20~10.14), 본선(11.28)" → 2026-07-30
+예: "대회기간: 5.13~9.30 / 신청 접수: 5.13~6.26" → 2026-06-26
 
 === target 추출 규칙 ===
 - 신청·참가 가능한 구체적인 대상을 40자 이내로 추출
@@ -601,7 +762,23 @@ def extract_key_info_with_ai(
     if ai_result is None:
         return regex_result
 
-    deadline = ai_result["deadline"] if ai_result["deadline"] is not None else regex_result["deadline"]
+    if regex_result["deadline"] is None:
+        deadline = ai_result["deadline"]
+    elif ai_result["deadline"] is None or ai_result["deadline"] == regex_result["deadline"]:
+        deadline = regex_result["deadline"]
+    elif _has_application_deadline_evidence(combined, ai_result["deadline"], _parse_reference_date(notice_date)):
+        log.info(
+            "  [AI] regex deadline overridden after application-context evidence check: "
+            f"{regex_result['deadline']} -> {ai_result['deadline']}"
+        )
+        deadline = ai_result["deadline"]
+    else:
+        log.info(
+            "  [AI] keeping regex deadline; AI date lacked application-context evidence: "
+            f"{regex_result['deadline']} vs {ai_result['deadline']}"
+        )
+        deadline = regex_result["deadline"]
+
     if ai_result["deadline"] == deadline and ai_result["deadline_time"] is not None:
         deadline_time = ai_result["deadline_time"]
     elif regex_result["deadline"] == deadline:
