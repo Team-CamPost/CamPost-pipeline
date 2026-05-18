@@ -22,7 +22,7 @@ def _resolve_local_path(local_path: str) -> Path:
     rel = local_path.replace("\\", "/")
     if rel.startswith("files/"):
         return Path(OUTPUT_DIR) / rel
-    return Path(local_path)
+    return Path(rel)
 
 
 def reparse_hwp_attachments(dry_run: bool, source_filter: str | None) -> None:
@@ -78,12 +78,14 @@ def reparse_hwp_attachments(dry_run: bool, source_filter: str | None) -> None:
                 errors += 1
                 continue
 
+            extracted = text.strip()
+            parse_ok = bool(extracted)
             quality = (
                 "full"
-                if parser == "pyhwp_bodytext"
+                if parse_ok and parser == "pyhwp_bodytext"
                 else "preview"
-                if parser == "olefile_prvtext"
-                else "failed"
+                if parse_ok and parser == "olefile_prvtext"
+                else "none"
             )
             parser_counts[parser] = parser_counts.get(parser, 0) + 1
 
@@ -93,7 +95,7 @@ def reparse_hwp_attachments(dry_run: bool, source_filter: str | None) -> None:
                 attachment.get("parse_quality"),
                 attachment.get("extracted_chars"),
             )
-            new = (text, parser, quality, len(text))
+            new = (extracted, parser, quality, len(extracted))
             if old == new:
                 unchanged += 1
                 continue
@@ -101,13 +103,13 @@ def reparse_hwp_attachments(dry_run: bool, source_filter: str | None) -> None:
             print(
                 f"[update] {raw_path.stem} | {attachment.get('name')} | "
                 f"{attachment.get('parser')}->{parser} | "
-                f"{len(attachment.get('extracted_text') or '')}->{len(text)} chars"
+                f"{len(attachment.get('extracted_text') or '')}->{len(extracted)} chars"
             )
-            attachment["extracted_text"] = text
+            attachment["extracted_text"] = extracted
             attachment["parser"] = parser
-            attachment["parse_ok"] = bool(text.strip())
+            attachment["parse_ok"] = parse_ok
             attachment["parse_quality"] = quality
-            attachment["extracted_chars"] = len(text)
+            attachment["extracted_chars"] = len(extracted)
             changed = True
             updated_attachments += 1
 

@@ -44,8 +44,14 @@ def _compute_checksum(path: Path) -> str:
     return sha256.hexdigest()
 
 
-def _is_reusable_download(path: Path) -> bool:
-    return path.is_file() and path.stat().st_size > 0
+def _reusable_download_size(path: Path) -> int | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if not path.is_file() or stat.st_size <= 0:
+        return None
+    return stat.st_size
 
 
 def _get_mime_type(filename: str) -> str:
@@ -55,15 +61,22 @@ def _get_mime_type(filename: str) -> str:
 
 async def download_file(url: str, save_path: Path) -> bool:
     headers = {"User-Agent": USER_AGENT}
+    tmp_path = save_path.with_name(f".{save_path.name}.tmp")
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
-            save_path.write_bytes(resp.content)
+            tmp_path.write_bytes(resp.content)
+            tmp_path.replace(save_path)
             log.debug(f"다운로드 완료: {save_path.name} ({len(resp.content):,} bytes)")
             return True
     except Exception as exc:
         log.warning(f"다운로드 실패 ({save_path.name}): {exc}")
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError as cleanup_exc:
+            log.warning(f"다운로드 실패 임시 파일 정리 실패 ({tmp_path.name}): {cleanup_exc}")
         return False
 
 
@@ -97,11 +110,11 @@ def _get_para_text_from_chunks(chunks: list) -> str:
 
 def _extract_hwp_pyhwp(path: Path) -> str:
     """
-    pyhwp(hwp5)로 HWP BodyText 전체 추출 — 표 구조 포함.
+    Extract all HWP BodyText paragraph text with pyhwp.
 
-    표는 LIST_HEADER(row/col)로 셀을 특정하고 '헤더 | 셀1 | 셀2' 형식으로 변환.
-    다중 섹션을 모두 순회한다.
-    pyhwp 미설치 또는 파싱 실패 시 빈 문자열 반환.
+    This is a plain paragraph-text pass over every body section. It does not
+    reconstruct table layout or styling. Returns an empty string when pyhwp is
+    unavailable or the file cannot be parsed.
     """
     try:
         from hwp5.xmlmodel import Hwp5File
@@ -140,11 +153,11 @@ def _extract_hwp_pyhwp(path: Path) -> str:
 
 def _extract_hwp(path: Path) -> tuple[str, str]:
     """
-    HWP 텍스트 추출.
+    Extract HWP text.
 
-    1차: pyhwp로 BodyText 전체 파싱 (표 구조 포함).
-    2차: olefile PrvText (pyhwp 실패 또는 결과가 PrvText보다 짧을 때 보완).
-    두 결과 중 긴 쪽을 반환. 둘 다 빈 문자열이면 ("", "none") 반환.
+    Prefer pyhwp BodyText paragraph extraction. PrvText is used only as a
+    fallback when BodyText extraction returns no text. Returns ("", "none")
+    when neither source has usable text.
     """
     pyhwp_text = _extract_hwp_pyhwp(path)
     if pyhwp_text:
@@ -383,6 +396,7 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
         file_key       : "{article_id}_{safe_filename}"
         local_path     : data/files/ 기준 상대 경로
         mime_type, file_size, checksum
+        download_cached: 기존 non-empty 파일 재사용 여부
         extracted_text : 추출된 텍스트
         download_ok    : 다운로드 성공 여부
         parser         : 사용한 파서 이름 (parse_logs 기록용)
@@ -394,10 +408,11 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
         save_path = FILES_DIR / filename
 
         download_cached = False
-        if _is_reusable_download(save_path):
+        cached_file_size = _reusable_download_size(save_path)
+        if cached_file_size is not None:
             download_ok = True
             download_cached = True
-            log.debug(f"Download cache hit: {save_path.name} ({save_path.stat().st_size:,} bytes)")
+            log.debug(f"다운로드 캐시 사용: {save_path.name} ({cached_file_size:,} bytes)")
         else:
             download_ok = await download_file(att["url"], save_path)
 
@@ -415,14 +430,14 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
 
         parse_quality = (
             "full"
-            if parser in {"pyhwp_bodytext", "pdfplumber", "hwpx_xml", "docx_xml"}
+            if parse_ok and parser in {"pyhwp_bodytext", "pdfplumber", "hwpx_xml", "docx_xml"}
             else "preview"
-            if parser == "olefile_prvtext"
+            if parse_ok and parser == "olefile_prvtext"
             else "none"
         )
         file_key = filename
         checksum = _compute_checksum(save_path) if download_ok else None
-        file_size = save_path.stat().st_size if download_ok else None
+        file_size = cached_file_size if download_cached else save_path.stat().st_size if download_ok else None
         mime_type = _get_mime_type(att["name"])
 
         results.append(

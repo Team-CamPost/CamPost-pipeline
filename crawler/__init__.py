@@ -280,8 +280,8 @@ def run_startup_reextract() -> None:
                     content_updated += 1
         if not (
             data.get("deadline") is not None
-            and "deadline_time" in data
-            and "deadline_at" in data
+            and data.get("deadline_time") is not None
+            and data.get("deadline_at") is not None
             and data.get("target") is not None
             and data.get("apply_method") is not None
         ):
@@ -337,8 +337,8 @@ def run_startup_reextract() -> None:
             continue
 
         new_deadline     = old_deadline     if old_deadline     is not None else result["deadline"]
-        new_deadline_time = old_deadline_time if "deadline_time" in data else result["deadline_time"]
-        new_deadline_at = old_deadline_at if "deadline_at" in data else result["deadline_at"]
+        new_deadline_time = old_deadline_time if old_deadline_time is not None else result["deadline_time"]
+        new_deadline_at = old_deadline_at if old_deadline_at is not None else result["deadline_at"]
         new_target       = old_target       if old_target       is not None else result["target"]
         new_apply_method = old_apply_method if old_apply_method is not None else result["apply_method"]
 

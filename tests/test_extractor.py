@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from crawler.extractor import (
     extract_apply_method,
@@ -6,6 +7,7 @@ from crawler.extractor import (
     extract_deadline_info,
     extract_deadline_time,
     extract_key_info,
+    extract_key_info_with_ai,
     extract_target,
 )
 
@@ -48,6 +50,19 @@ class ExtractorTests(unittest.TestCase):
         text = "예선: 2026. 5. 16(토) 14:00 ~ 16:00 (온라인, 2시간)"
         self.assertEqual(extract_deadline(text), "2026-05-16")
         self.assertIsNone(extract_deadline_time(text))
+
+    def test_event_datetime_end_time_is_fallback_deadline(self):
+        text = """
+        행사 개요
+        1) 행사명 : 2026학년도 전공박람회
+        2) 일 시 : 2026. 5. 19.(화) 10:00~16:00
+        3) 장 소 : 혜당관~도서관 사이 광장
+        """
+        self.assertEqual(extract_deadline_info(text, "2026.05.13"), {
+            "deadline": "2026-05-19",
+            "deadline_time": "16:00",
+            "deadline_at": "2026-05-19T16:00:00+09:00",
+        })
 
     def test_extract_target_from_text(self):
         text = "지원 대상: 3~4학년 재학생"
@@ -96,6 +111,116 @@ class ExtractorTests(unittest.TestCase):
     def test_extract_deadline_from_period_with_short_end_date(self):
         text = "설문기간 2026.04.03(금) ~ 04.15(수)"
         self.assertEqual(extract_deadline(text, "2026.04.06"), "2026-04-15")
+
+    def test_extract_deadline_from_application_reception_period(self):
+        text = """
+        대회기간 : 2026년 5월 13일(수) ~ 9월 30일(수)
+        다. 지원방법
+        - 하기 참고 URL 신청 접수 (5.13.(수) ~ 6.26.(금))
+        - https://www.metaversedev.kr/
+        이벤트 기간: 2026.05.13.(수)~06.26.(금)
+        """
+        self.assertEqual(extract_deadline(text, "2026.05.13"), "2026-06-26")
+
+    def test_extract_key_info_from_application_reception_period(self):
+        result = extract_key_info(
+            """
+            대회기간 : 2026년 5월 13일(수) ~ 9월 30일(수)
+            지원방법: 하기 참고 URL 신청 접수 (5.13.(수) ~ 6.26.(금))
+            """,
+            [],
+            title="2026년 AI·가상융합(XR) 서비스 개발자 경진대회",
+            notice_date="2026.05.13",
+        )
+
+        self.assertEqual(result["deadline"], "2026-06-26")
+        self.assertIsNone(result["deadline_time"])
+        self.assertIsNone(result["deadline_at"])
+
+    def test_extract_deadline_from_participant_reception_period_before_event_dates(self):
+        text = """
+        o 일 정 : 참가자 접수(5.26~7.30), 발대식(8.20), 예선(8.20~10.14), 본선(11.28)
+        나. 대회 안내 및 참가접수
+        ※ 2026.5.26.(화)~7.30.(목) 기간 내 온라인 참가신청서 제출
+        """
+        self.assertEqual(extract_deadline(text, "2026.05.14"), "2026-07-30")
+
+    def test_extract_key_info_from_participant_reception_period(self):
+        result = extract_key_info(
+            """
+            참가대상 : 데이터 및 AI 분야에 관심 있는 학생(대학생, 고등학생 2개 부문)
+            일 정 : 참가자 접수(5.26~7.30), 발대식(8.20), 예선(8.20~10.14), 본선(11.28)
+            장 소 : 온라인(예선) 및 한국지능정보사회진흥원 서울사무소(본선)
+            대회 안내 및 참가접수
+            ※ 2026.5.26.(화)~7.30.(목) 기간 내 온라인 참가신청서 제출
+            """,
+            [],
+            title="2026년 데이터+AI 크리에이터 캠프 참가자 모집",
+            notice_date="2026.05.14",
+        )
+
+        self.assertEqual(result["deadline"], "2026-07-30")
+        self.assertIsNone(result["deadline_time"])
+        self.assertIsNone(result["deadline_at"])
+
+    def test_ignores_general_event_period_before_application_period(self):
+        result = extract_key_info(
+            """
+            대회기간 : 2026년 5월 13일(수) ~ 9월 30일(수)
+            지원방법: 홈페이지에서 참가자 접수(5.26~7.30)
+            """,
+            [],
+            title="데이터 경진대회 참가자 모집",
+            notice_date="2026.05.13",
+        )
+
+        self.assertEqual(result["deadline"], "2026-07-30")
+
+    def test_ai_does_not_override_application_deadline_with_final_event_date(self):
+        with patch("crawler.extractor._ai_extract") as ai_extract:
+            ai_extract.return_value = {
+                "deadline": "2026-11-28",
+                "deadline_time": None,
+                "deadline_at": None,
+                "target": None,
+                "apply_method": None,
+            }
+
+            result = extract_key_info_with_ai(
+                """
+                참가자 접수(5.26~7.30), 발대식(8.20), 예선(8.20~10.14), 본선(11.28)
+                ※ 2026.5.26.(화)~7.30.(목) 기간 내 온라인 참가신청서 제출
+                """,
+                [],
+                api_key="test-key",
+                title="2026년 데이터+AI 크리에이터 캠프 참가자 모집",
+                notice_date="2026.05.14",
+            )
+
+        self.assertEqual(result["deadline"], "2026-07-30")
+
+    def test_ai_can_override_when_candidate_has_application_evidence(self):
+        with patch("crawler.extractor._ai_extract") as ai_extract:
+            ai_extract.return_value = {
+                "deadline": "2026-07-30",
+                "deadline_time": None,
+                "deadline_at": None,
+                "target": None,
+                "apply_method": None,
+            }
+
+            result = extract_key_info_with_ai(
+                """
+                마감일: 2026.08.20
+                실제 신청 접수는 2026.5.26.(화)~7.30.(목)까지입니다.
+                """,
+                [],
+                api_key="test-key",
+                title="AI override evidence test",
+                notice_date="2026.05.14",
+            )
+
+        self.assertEqual(result["deadline"], "2026-07-30")
 
 
 if __name__ == "__main__":

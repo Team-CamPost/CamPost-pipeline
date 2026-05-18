@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from crawler import file_handler
-from crawler.file_handler import extract_text, process_attachments
+from crawler.file_handler import download_file, extract_text, process_attachments
 
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -52,6 +52,46 @@ class FileHandlerTests(unittest.TestCase):
 
 
 class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
+    async def test_download_file_removes_partial_temp_file_on_write_failure(self):
+        class FakeResponse:
+            content = b"complete"
+
+            def raise_for_status(self):
+                return None
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, _url, headers):
+                return FakeResponse()
+
+        def fail_after_partial_write(path: Path, _data: bytes) -> int:
+            with path.open("wb") as f:
+                f.write(b"partial")
+            raise OSError("disk full")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            save_path = Path(tmp) / "attachment.txt"
+            save_path.write_bytes(b"previous")
+            tmp_path = save_path.with_name(f".{save_path.name}.tmp")
+
+            with (
+                patch.object(file_handler.httpx, "AsyncClient", new=FakeClient),
+                patch.object(Path, "write_bytes", fail_after_partial_write),
+            ):
+                ok = await download_file("https://example.test/attachment.txt", save_path)
+
+            self.assertFalse(ok)
+            self.assertFalse(tmp_path.exists())
+            self.assertEqual(save_path.read_bytes(), b"previous")
+
     async def test_process_attachments_reuses_existing_non_empty_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             files_dir = Path(tmp)
@@ -93,7 +133,7 @@ class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
 
             with (
                 patch.object(file_handler, "FILES_DIR", files_dir),
-                patch.object(file_handler, "download_file", side_effect=fake_download) as download,
+                patch.object(file_handler, "download_file", new=AsyncMock(side_effect=fake_download)) as download,
             ):
                 results = await process_attachments(
                     [{"name": "empty.txt", "url": "https://example.test/empty.txt", "ext": "txt"}],
@@ -108,6 +148,29 @@ class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attachment["file_size"], 5)
         self.assertEqual(attachment["parser"], "none")
         self.assertEqual(attachment["parse_quality"], "none")
+
+    async def test_process_attachments_marks_empty_parser_result_as_none_quality(self):
+        async def fake_download(_url: str, save_path: Path) -> bool:
+            save_path.write_bytes(b"%PDF-empty-text")
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            files_dir = Path(tmp)
+            with (
+                patch.object(file_handler, "FILES_DIR", files_dir),
+                patch.object(file_handler, "download_file", new=AsyncMock(side_effect=fake_download)),
+                patch.object(file_handler, "extract_text", return_value=("", "pdfplumber")),
+            ):
+                results = await process_attachments(
+                    [{"name": "empty.pdf", "url": "https://example.test/empty.pdf", "ext": "pdf"}],
+                    "SW_1",
+                )
+
+        attachment = results[0]
+        self.assertFalse(attachment["parse_ok"])
+        self.assertEqual(attachment["parser"], "pdfplumber")
+        self.assertEqual(attachment["parse_quality"], "none")
+        self.assertEqual(attachment["extracted_chars"], 0)
 
 
 if __name__ == "__main__":

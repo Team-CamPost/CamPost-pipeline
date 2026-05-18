@@ -59,7 +59,7 @@ def reparse_docx_attachments(dry_run: bool, source_filter: str | None) -> None:
                 continue
             if (attachment.get("ext") or "").lower() != "docx":
                 continue
-            if not attachment.get("download_ok"):
+            if not attachment.get("download_ok") or not attachment.get("local_path"):
                 continue
 
             local_path = _resolve_local_path(attachment.get("local_path") or "")
