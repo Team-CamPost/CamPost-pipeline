@@ -172,6 +172,7 @@ def _extract_dates(text: str, reference_date: date | None) -> list[tuple[int, st
 _APPLICATION_RANGE_CONTEXT_RE = re.compile(
     r"(?:"
     r"신청\s*접수|신청\s*기간|신청\s*마감|신청\s*기한|"
+    r"신청\s*및\s*승인|"
     r"접수\s*기간|접수\s*마감|접수\s*기한|접수\s*종료|"
     r"모집\s*기간|모집\s*마감|모집\s*기한|"
     r"지원\s*기간|지원\s*마감|지원\s*기한|"
@@ -220,6 +221,7 @@ def _extract_datetime_records(
     full_pattern = re.compile(
         r"(?<!\d)"
         r"(\d{4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*(?:일)?"
+        r"(?:\.)?"
         r"(?:\([월화수목금토일]\))?"
         r"(?:\.|\))?"
         rf"(?:\s*{_TIME_RE})?"
@@ -227,6 +229,7 @@ def _extract_datetime_records(
     short_pattern = re.compile(
         r"(?<!\d)"
         r"(\d{1,2})\s*(?:[./]|월)\s*(\d{1,2})\s*(?:일)?"
+        r"(?:\.)?"
         r"(?:\([월화수목금토일]\))?"
         r"(?:\.|\))?"
         rf"(?:\s*{_TIME_RE})?"
@@ -265,6 +268,7 @@ def _extract_datetime_records(
 _DEADLINE_CONTEXT_RE = re.compile(
     r"(?:"
     r"신청\s*기간|신청\s*마감|신청\s*기한|신청\s*접수|"
+    r"신청\s*및\s*승인|"
     r"지원\s*기간|지원\s*마감|지원\s*기한|지원\s*방법|"
     r"접수\s*기간|접수\s*마감|접수\s*기한|접수\s*종료|"
     r"모집\s*기간|모집\s*마감|모집\s*기한|"
@@ -476,14 +480,44 @@ _TARGET_PATTERNS = [
     r"((?:[1-4]학년|전\s*학년|재학생|대학원생|졸업(?:예정)?자)(?:\s*[^\n,。;]{0,20})?)",
 ]
 
+_INVALID_TARGET_RE = re.compile(
+    r"(?:"
+    r"사유\s*및\s*인정기간|인정기간|증빙서류|유의사항|"
+    r"장학금액|지원금액|신청방법|제출방법|선발계획|"
+    r"설문조사\s*참여\s*안내|웹정보|수강신청|과목|버튼|체크|"
+    r"신청|접수|제출|출력|공지|안내|바랍니다|실시|"
+    r"학점|시험\s*일정|상담|서류|금액|기간|평가하여|입니다|께서는"
+    r")"
+)
+
+
+def _clean_extracted_phrase(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip(" \t\r\n-:：,。.;·ㆍ")
+
+
+def _is_valid_target_candidate(value: str) -> bool:
+    if not (2 <= len(value) <= 40):
+        return False
+    if _INVALID_TARGET_RE.search(value):
+        return False
+    if re.search(r"https?://|www\.|@[A-Za-z0-9.-]+", value):
+        return False
+    if re.match(r"^(?:으로|기관으로|자는|자\s*:|에\s+준하는|\(|\*)", value):
+        return False
+    if re.fullmatch(r"(?:으로|자|대상|학생|교강사|기간|내용)(?:\s*[^\w가-힣].*)?", value):
+        return False
+    return True
+
 
 def extract_target(text: str) -> str | None:
     """공지 지원 대상 추출. 없으면 None."""
+    if re.search(r"유고결석\s*출석인정", text):
+        return "유고결석 출석인정을 받고자 하는 학생"
+
     for pattern in _TARGET_PATTERNS:
-        m = re.search(pattern, text)
-        if m:
-            result = m.group(1).strip()
-            if 2 <= len(result) <= 40:
+        for m in re.finditer(pattern, text):
+            result = _clean_extracted_phrase(m.group(1))
+            if _is_valid_target_candidate(result):
                 return result
     return None
 
@@ -491,19 +525,43 @@ def extract_target(text: str) -> str | None:
 # ── 신청 방법 추출 (regex) ────────────────────────────────
 
 _APPLY_PATTERNS = [
+    r"신청\s*및\s*승인\s*절차\s*[:\-]?\s*([^\n。;]{3,60})",
     r"(?:신청|지원|참가|접수)\s*방법\s*[:\-]?\s*([^\n。;]{3,60})",
     r"(?:신청처|접수처)\s*[:\-]?\s*([^\n。;]{3,60})",
+    r"((?:웹정보시스템|웹정보)\s*신청(?:\s*및\s*증빙서류\s*업로드)?)",
     r"((?:이메일|온라인|구글\s*폼|홈페이지|방문|우편)\s*[^\n]{0,30}(?:접수|신청|제출|등록))",
 ]
+
+_APPLY_ACTION_RE = re.compile(
+    r"(?:"
+    r"이메일|메일|온라인|구글|폼|홈페이지|웹정보|방문|우편|제출|접수|신청|등록|"
+    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    r")"
+)
+_INVALID_APPLY_RE = re.compile(
+    r"^(?:"
+    r"및\s+|[0-9]+[.)]\s*|\[[^\]]+\]\s*버튼|[가-힣]\s*[>⇒→]|"
+    r"(?:신청|접수|지원|모집)\s*기간\s*:"
+    r")"
+)
+
+
+def _is_valid_apply_candidate(value: str) -> bool:
+    if not (3 <= len(value) <= 60):
+        return False
+    if _INVALID_APPLY_RE.search(value):
+        return False
+    if value in {"및 선발계획", "선발계획"}:
+        return False
+    return bool(_APPLY_ACTION_RE.search(value))
 
 
 def extract_apply_method(text: str) -> str | None:
     """신청 방법 추출. 없으면 None."""
     for pattern in _APPLY_PATTERNS:
-        m = re.search(pattern, text)
-        if m:
-            result = m.group(1).strip()
-            if 3 <= len(result) <= 60:
+        for m in re.finditer(pattern, text):
+            result = _clean_extracted_phrase(m.group(1))
+            if _is_valid_apply_candidate(result):
                 return result
     return None
 
