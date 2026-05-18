@@ -68,9 +68,63 @@ class ExtractorTests(unittest.TestCase):
         text = "지원 대상: 3~4학년 재학생"
         self.assertEqual(extract_target(text), "3~4학년 재학생")
 
+    def test_extract_target_skips_attachment_table_header(self):
+        text = """
+        첨부 문서 표 추출 테스트
+        나. 인정사유 및 인정기간: 세부내용은 첨부 참조
+
+        대상 사유및인정기간 증빙서류
+        체육특기자 전형으로 입학한 자
+        """
+        self.assertIsNone(extract_target(text))
+
+    def test_extract_target_skips_procedure_sentences(self):
+        text = """
+        신청 및 승인 절차: 학생(웹정보: 신청)-교학행정팀(접수)-교원(승인/미승인)
+        1. [출석과목조회] 버튼 클릭
+        2. 수강신청 과목목록 확인
+        """
+        self.assertIsNone(extract_target(text))
+
+    def test_extract_target_from_excused_absence_notice(self):
+        text = "2026학년도 1학기 유고결석 출석인정 안내"
+        self.assertEqual(extract_target(text), "유고결석 출석인정을 받고자 하는 학생")
+
     def test_extract_apply_method_from_text(self):
         text = "신청 방법: 이메일 제출"
         self.assertEqual(extract_apply_method(text), "이메일 제출")
+
+    def test_extract_apply_method_skips_section_heading_and_steps(self):
+        text = """
+        ※ 신청방법 및 선발계획
+        - 신청기간 : 2026.03.27 까지
+        - 신청방법 : chois6@dankook.ac.kr로 신청서 첨부 후 메일 작성
+
+        신청[웹정보시스템] 방법
+        1. [출석과목조회] 버튼 클릭
+        """
+        self.assertEqual(
+            extract_apply_method(text),
+            "chois6@dankook.ac.kr로 신청서 첨부 후 메일 작성",
+        )
+
+    def test_extract_apply_method_from_approval_process(self):
+        text = "신청 및 승인 절차: 학생(웹정보: 신청)-교학행정팀(접수)-교원(승인/미승인)"
+        self.assertEqual(
+            extract_apply_method(text),
+            "학생(웹정보: 신청)-교학행정팀(접수)-교원(승인/미승인)",
+        )
+
+    def test_extract_apply_method_from_webinfo_application(self):
+        text = "학생 [신청]\n웹정보시스템 신청\n(증빙서류 업로드)"
+        self.assertEqual(extract_apply_method(text), "웹정보시스템 신청")
+
+    def test_extract_apply_method_skips_application_period(self):
+        text = """
+        신청기간 : 2026. 6. 10(수) 11:00까지
+        신청방법 : 홈페이지에서 신청서 제출
+        """
+        self.assertEqual(extract_apply_method(text), "홈페이지에서 신청서 제출")
 
     def test_extract_deadline_from_competition_notice(self):
         text = "예선: 2026. 5. 16(토) 14:00 ~ 16:00 (온라인, 2시간)"
@@ -111,6 +165,14 @@ class ExtractorTests(unittest.TestCase):
     def test_extract_deadline_from_period_with_short_end_date(self):
         text = "설문기간 2026.04.03(금) ~ 04.15(수)"
         self.assertEqual(extract_deadline(text, "2026.04.06"), "2026-04-15")
+
+    def test_extract_deadline_from_application_approval_period(self):
+        text = "신청 및 승인은 2026.03.03.(화) ~ 06.22.(월) 오전11시까지 가능."
+        self.assertEqual(extract_deadline_info(text, "2026.04.08"), {
+            "deadline": "2026-06-22",
+            "deadline_time": "11:00",
+            "deadline_at": "2026-06-22T11:00:00+09:00",
+        })
 
     def test_extract_deadline_from_application_reception_period(self):
         text = """
