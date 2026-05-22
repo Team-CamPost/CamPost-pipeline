@@ -127,6 +127,15 @@ RAW_STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 EXTRACTABLE_EXTS = {"pdf", "hwp", "hwpx", "docx"}
 
+PDF_PREVIEW_EXTS = {
+    ext.strip().lower()
+    for ext in os.getenv("PDF_PREVIEW_EXTS", "hwp,hwpx").split(",")
+    if ext.strip()
+}
+PDF_CONVERSION_ENABLED: bool = os.getenv("PDF_CONVERSION_ENABLED", "true").lower() != "false"
+PDF_CONVERSION_TIMEOUT_SECONDS: int = int(os.getenv("PDF_CONVERSION_TIMEOUT_SECONDS", "60"))
+LIBREOFFICE_BIN: str = os.getenv("LIBREOFFICE_BIN", "").strip()
+
 # ── DB 연결 (crawl_jobs / parse_logs 쓰기 전용) ──────────
 DB_HOST = os.getenv("DB_HOST", "db")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))

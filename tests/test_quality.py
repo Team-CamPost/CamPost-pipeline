@@ -81,6 +81,41 @@ class QualityAuditTests(unittest.TestCase):
         self.assertIn("extracted_chars_mismatch", codes)
         self.assertIn("parse_quality_mismatch", codes)
 
+    def test_audit_attachment_quality_validates_preview_pdf_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            files_root = Path(tmp)
+            pdf_path = files_root / "SW_1_sample.pdf"
+            pdf_path.write_bytes(b"%PDF-preview")
+
+            notices = [
+                _notice(
+                    "SW_1",
+                    attachments=[
+                        {
+                            "name": "sample.hwp",
+                            "ext": "hwp",
+                            "local_path": "files/SW_1_sample.hwp",
+                            "download_ok": True,
+                            "parser": "pyhwp_bodytext",
+                            "parse_ok": True,
+                            "parse_quality": "full",
+                            "extracted_text": "abc",
+                            "extracted_chars": 3,
+                            "conversion_status": "success",
+                            "preview_pdf_path": "files/SW_1_sample.pdf",
+                            "preview_pdf_size": 1,
+                        }
+                    ],
+                )
+            ]
+
+            report = audit_attachment_quality(notices, files_root)
+
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("missing_attachment_file", codes)
+        self.assertIn("preview_pdf_size_mismatch", codes)
+        self.assertEqual(report["summary"]["conversion_status_counts"]["success"], 1)
+
     def test_find_duplicate_attachments_groups_by_checksum_and_url(self):
         notices = [
             _notice(

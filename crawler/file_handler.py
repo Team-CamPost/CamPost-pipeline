@@ -11,6 +11,9 @@ import hashlib
 import logging
 import mimetypes
 import re
+import shutil
+import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,7 +21,15 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
-from .config import EXTRACTABLE_EXTS, FILES_DIR, USER_AGENT
+from .config import (
+    EXTRACTABLE_EXTS,
+    FILES_DIR,
+    LIBREOFFICE_BIN,
+    PDF_CONVERSION_ENABLED,
+    PDF_CONVERSION_TIMEOUT_SECONDS,
+    PDF_PREVIEW_EXTS,
+    USER_AGENT,
+)
 
 mimetypes.add_type("application/x-hwp", ".hwp")
 mimetypes.add_type("application/x-hwpx", ".hwpx")
@@ -42,6 +53,104 @@ def _compute_checksum(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             sha256.update(chunk)
     return sha256.hexdigest()
+
+
+def _default_pdf_preview_metadata(status: str = "not_applicable", error: str | None = None) -> dict:
+    return {
+        "preview_pdf_path": None,
+        "preview_pdf_size": None,
+        "preview_pdf_checksum": None,
+        "conversion_status": status,
+        "conversion_engine": None,
+        "conversion_error": error,
+    }
+
+
+def _find_libreoffice() -> str | None:
+    if LIBREOFFICE_BIN:
+        configured = Path(LIBREOFFICE_BIN)
+        if configured.exists():
+            return str(configured)
+        resolved = shutil.which(LIBREOFFICE_BIN)
+        if resolved:
+            return resolved
+
+    for candidate in ("soffice", "libreoffice"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def convert_to_pdf_preview(path: Path, ext: str) -> dict:
+    """
+    Convert an HWP/HWPX attachment to a cached PDF preview with LibreOffice.
+
+    This is best-effort preview generation. The original attachment remains the
+    source of truth, and callers should fall back to extracted text or download
+    when conversion_status is not "success".
+    """
+    normalized_ext = (ext or "").lower()
+    if normalized_ext not in PDF_PREVIEW_EXTS:
+        return _default_pdf_preview_metadata()
+
+    if not PDF_CONVERSION_ENABLED:
+        return _default_pdf_preview_metadata("disabled", "PDF conversion is disabled")
+
+    converter = _find_libreoffice()
+    if not converter:
+        return _default_pdf_preview_metadata("unavailable", "LibreOffice executable not found")
+
+    output_path = path.with_suffix(".pdf")
+    try:
+        if output_path.exists():
+            output_path.unlink()
+    except OSError as exc:
+        return _default_pdf_preview_metadata("failed", f"Could not remove stale PDF: {exc}")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="campost-lo-") as profile_dir:
+            profile_uri = Path(profile_dir).resolve().as_uri()
+            completed = subprocess.run(
+                [
+                    converter,
+                    "--headless",
+                    "--nologo",
+                    "--nofirststartwizard",
+                    "--nodefault",
+                    "--nolockcheck",
+                    f"-env:UserInstallation={profile_uri}",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(path.parent),
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=PDF_CONVERSION_TIMEOUT_SECONDS,
+                check=False,
+            )
+    except subprocess.TimeoutExpired:
+        return _default_pdf_preview_metadata(
+            "timeout",
+            f"LibreOffice conversion timed out after {PDF_CONVERSION_TIMEOUT_SECONDS}s",
+        )
+    except Exception as exc:
+        return _default_pdf_preview_metadata("failed", str(exc))
+
+    if completed.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
+        error = (completed.stderr or completed.stdout or "PDF output was not created").strip()
+        return _default_pdf_preview_metadata("failed", error[:500])
+
+    return {
+        "preview_pdf_path": f"files/{output_path.name}",
+        "preview_pdf_size": output_path.stat().st_size,
+        "preview_pdf_checksum": _compute_checksum(output_path),
+        "conversion_status": "success",
+        "conversion_engine": "libreoffice",
+        "conversion_error": None,
+    }
 
 
 def _reusable_download_size(path: Path) -> int | None:
@@ -428,6 +537,17 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
                 f"→ {len(extracted_text)}자 (parser={parser})"
             )
 
+        pdf_preview = (
+            convert_to_pdf_preview(save_path, att["ext"])
+            if download_ok
+            else _default_pdf_preview_metadata("download_failed", "Attachment download failed")
+        )
+        if pdf_preview["conversion_status"] == "success":
+            log.info(
+                f"  PDF preview converted [{att['ext'].upper()}] {att['name'][:30]} "
+                f"-> {pdf_preview['preview_pdf_size']} bytes"
+            )
+
         parse_quality = (
             "full"
             if parse_ok and parser in {"pyhwp_bodytext", "pdfplumber", "hwpx_xml", "docx_xml"}
@@ -455,6 +575,7 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
                 "parser": parser,
                 "parse_quality": parse_quality,
                 "parse_ok": parse_ok,
+                **pdf_preview,
             }
         )
 
