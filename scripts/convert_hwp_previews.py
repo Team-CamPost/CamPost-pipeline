@@ -37,6 +37,8 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="reconvert attachments with success status")
     parser.add_argument("--limit", type=int, help="maximum attachments to process")
     args = parser.parse_args()
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be greater than or equal to 1")
 
     raw_dir = args.root / "raw"
     files_dir = args.root / "files"
@@ -52,7 +54,7 @@ def main() -> None:
 
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception as exc:
+        except (OSError, json.JSONDecodeError) as exc:
             errors += 1
             print(f"[error] read failed {path.name}: {exc}")
             continue
@@ -85,7 +87,7 @@ def main() -> None:
                 print(f"[candidate] {path.stem}: {name}")
                 continue
 
-            metadata = convert_to_pdf_preview(local_path, ext)
+            metadata = convert_to_pdf_preview(local_path, ext, force=args.force)
             attachment.update(metadata)
             status_counts[str(metadata["conversion_status"])] += 1
             changed = True

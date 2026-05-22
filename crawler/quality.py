@@ -344,7 +344,9 @@ def audit_attachment_quality(notices: list[RawNotice], files_root: Path) -> dict
                     continue
 
                 actual_pdf_size = resolved_pdf.stat().st_size
-                if attachment.get("preview_pdf_size") is not None and attachment.get("preview_pdf_size") != actual_pdf_size:
+                if attachment.get("preview_pdf_size") is None:
+                    issues.append(_issue("missing_preview_pdf_size", article_id, "successful PDF conversion has no preview_pdf_size", "error", index=index))
+                elif attachment.get("preview_pdf_size") != actual_pdf_size:
                     issues.append(
                         _issue(
                             "preview_pdf_size_mismatch",
@@ -356,7 +358,9 @@ def audit_attachment_quality(notices: list[RawNotice], files_root: Path) -> dict
                         )
                     )
                 preview_checksum = attachment.get("preview_pdf_checksum")
-                if preview_checksum:
+                if not preview_checksum:
+                    issues.append(_issue("missing_preview_pdf_checksum", article_id, "successful PDF conversion has no preview_pdf_checksum", "error", index=index))
+                else:
                     actual_preview_checksum = _file_sha256(resolved_pdf)
                     if actual_preview_checksum and preview_checksum != actual_preview_checksum:
                         issues.append(_issue("preview_pdf_checksum_mismatch", article_id, "preview_pdf_checksum does not match disk file", "error", index=index))

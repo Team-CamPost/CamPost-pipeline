@@ -6,6 +6,7 @@ HWPX : zipfile + XML 파싱
 기타 : 다운로드만, 텍스트 추출 생략
 """
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -15,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
@@ -66,6 +68,33 @@ def _default_pdf_preview_metadata(status: str = "not_applicable", error: str | N
     }
 
 
+def _pdf_preview_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.preview.pdf")
+
+
+def _pdf_preview_success_metadata(path: Path) -> dict:
+    return {
+        "preview_pdf_path": f"files/{path.name}",
+        "preview_pdf_size": path.stat().st_size,
+        "preview_pdf_checksum": _compute_checksum(path),
+        "conversion_status": "success",
+        "conversion_engine": "libreoffice",
+        "conversion_error": None,
+    }
+
+
+def _is_reusable_pdf_preview(source_path: Path, preview_path: Path) -> bool:
+    try:
+        return (
+            preview_path.is_file()
+            and preview_path.stat().st_size > 0
+            and preview_path.stat().st_mtime >= source_path.stat().st_mtime
+        )
+    except OSError:
+        return False
+
+
+@lru_cache(maxsize=1)
 def _find_libreoffice() -> str | None:
     if LIBREOFFICE_BIN:
         configured = Path(LIBREOFFICE_BIN)
@@ -82,7 +111,7 @@ def _find_libreoffice() -> str | None:
     return None
 
 
-def convert_to_pdf_preview(path: Path, ext: str) -> dict:
+def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict:
     """
     Convert an HWP/HWPX attachment to a cached PDF preview with LibreOffice.
 
@@ -101,15 +130,15 @@ def convert_to_pdf_preview(path: Path, ext: str) -> dict:
     if not converter:
         return _default_pdf_preview_metadata("unavailable", "LibreOffice executable not found")
 
-    output_path = path.with_suffix(".pdf")
-    try:
-        if output_path.exists():
-            output_path.unlink()
-    except OSError as exc:
-        return _default_pdf_preview_metadata("failed", f"Could not remove stale PDF: {exc}")
+    output_path = _pdf_preview_path(path)
+    if not force and _is_reusable_pdf_preview(path, output_path):
+        return _pdf_preview_success_metadata(output_path)
 
     try:
-        with tempfile.TemporaryDirectory(prefix="campost-lo-") as profile_dir:
+        with (
+            tempfile.TemporaryDirectory(prefix="campost-lo-") as profile_dir,
+            tempfile.TemporaryDirectory(prefix="campost-pdf-") as output_dir,
+        ):
             profile_uri = Path(profile_dir).resolve().as_uri()
             completed = subprocess.run(
                 [
@@ -123,7 +152,7 @@ def convert_to_pdf_preview(path: Path, ext: str) -> dict:
                     "--convert-to",
                     "pdf",
                     "--outdir",
-                    str(path.parent),
+                    output_dir,
                     str(path),
                 ],
                 capture_output=True,
@@ -131,26 +160,26 @@ def convert_to_pdf_preview(path: Path, ext: str) -> dict:
                 timeout=PDF_CONVERSION_TIMEOUT_SECONDS,
                 check=False,
             )
+            libreoffice_output_path = Path(output_dir) / path.with_suffix(".pdf").name
+            if (
+                completed.returncode == 0
+                and libreoffice_output_path.exists()
+                and libreoffice_output_path.stat().st_size > 0
+            ):
+                libreoffice_output_path.replace(output_path)
     except subprocess.TimeoutExpired:
         return _default_pdf_preview_metadata(
             "timeout",
             f"LibreOffice conversion timed out after {PDF_CONVERSION_TIMEOUT_SECONDS}s",
         )
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         return _default_pdf_preview_metadata("failed", str(exc))
 
     if completed.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
         error = (completed.stderr or completed.stdout or "PDF output was not created").strip()
         return _default_pdf_preview_metadata("failed", error[:500])
 
-    return {
-        "preview_pdf_path": f"files/{output_path.name}",
-        "preview_pdf_size": output_path.stat().st_size,
-        "preview_pdf_checksum": _compute_checksum(output_path),
-        "conversion_status": "success",
-        "conversion_engine": "libreoffice",
-        "conversion_error": None,
-    }
+    return _pdf_preview_success_metadata(output_path)
 
 
 def _reusable_download_size(path: Path) -> int | None:
@@ -538,7 +567,7 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
             )
 
         pdf_preview = (
-            convert_to_pdf_preview(save_path, att["ext"])
+            await asyncio.to_thread(convert_to_pdf_preview, save_path, att["ext"])
             if download_ok
             else _default_pdf_preview_metadata("download_failed", "Attachment download failed")
         )
