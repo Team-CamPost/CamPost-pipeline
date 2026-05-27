@@ -35,6 +35,7 @@ def main() -> None:
     print(f"extensions    : {summary['ext_counts']}")
     print(f"parsers       : {summary['parser_counts']}")
     print(f"parse quality : {summary['parse_quality_counts']}")
+    print(f"conversion    : {summary['conversion_status_counts']}")
     print(f"issues        : {summary['issue_count']} {summary['issue_counts']}")
     if load_errors:
         print(f"load errors   : {len(load_errors)}")

@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -5,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from crawler import file_handler
-from crawler.file_handler import download_file, extract_text, process_attachments
+from crawler.file_handler import convert_to_pdf_preview, download_file, extract_text, process_attachments
 
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -49,6 +50,113 @@ class FileHandlerTests(unittest.TestCase):
         self.assertIn("Cell B", text)
         self.assertIn("Before\tAfter tab\nAfter break", text)
         self.assertIn("Header text", text)
+
+    def test_convert_to_pdf_preview_records_success_metadata(self):
+        def fake_run(cmd, **_kwargs):
+            out_dir = Path(cmd[cmd.index("--outdir") + 1])
+            source = Path(cmd[-1])
+            (out_dir / source.with_suffix(".pdf").name).write_bytes(b"%PDF-preview")
+            return subprocess.CompletedProcess(cmd, 0, "converted", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.hwp"
+            path.write_bytes(b"hwp")
+
+            with (
+                patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
+                patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
+                patch.object(file_handler, "_find_libreoffice", return_value="soffice"),
+                patch.object(file_handler.subprocess, "run", side_effect=fake_run),
+            ):
+                metadata = convert_to_pdf_preview(path, "hwp")
+
+        self.assertEqual(metadata["conversion_status"], "success")
+        self.assertEqual(metadata["conversion_engine"], "libreoffice")
+        self.assertEqual(metadata["preview_pdf_path"], "files/sample.hwp.preview.pdf")
+        self.assertEqual(metadata["preview_pdf_size"], len(b"%PDF-preview"))
+        self.assertRegex(metadata["preview_pdf_checksum"], r"^[0-9a-f]{64}$")
+
+    def test_convert_to_pdf_preview_does_not_overwrite_pdf_attachment(self):
+        def fake_run(cmd, **_kwargs):
+            out_dir = Path(cmd[cmd.index("--outdir") + 1])
+            source = Path(cmd[-1])
+            (out_dir / source.with_suffix(".pdf").name).write_bytes(b"%PDF-preview")
+            return subprocess.CompletedProcess(cmd, 0, "converted", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.hwp"
+            existing_pdf = Path(tmp) / "sample.pdf"
+            path.write_bytes(b"hwp")
+            existing_pdf.write_bytes(b"real pdf")
+
+            with (
+                patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
+                patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
+                patch.object(file_handler, "_find_libreoffice", return_value="soffice"),
+                patch.object(file_handler.subprocess, "run", side_effect=fake_run),
+            ):
+                metadata = convert_to_pdf_preview(path, "hwp")
+            existing_pdf_bytes = existing_pdf.read_bytes()
+
+        self.assertEqual(existing_pdf_bytes, b"real pdf")
+        self.assertEqual(metadata["preview_pdf_path"], "files/sample.hwp.preview.pdf")
+
+    def test_convert_to_pdf_preview_reuses_existing_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.hwp"
+            preview = Path(tmp) / "sample.hwp.preview.pdf"
+            path.write_bytes(b"hwp")
+            preview.write_bytes(b"%PDF-preview")
+
+            with (
+                patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
+                patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
+                patch.object(file_handler, "_find_libreoffice", return_value="soffice"),
+                patch.object(file_handler.subprocess, "run") as run,
+            ):
+                metadata = convert_to_pdf_preview(path, "hwp")
+
+        run.assert_not_called()
+        self.assertEqual(metadata["conversion_status"], "success")
+        self.assertEqual(metadata["preview_pdf_path"], "files/sample.hwp.preview.pdf")
+
+    def test_convert_to_pdf_preview_does_not_report_stale_preview_as_success(self):
+        def fake_run_without_output(cmd, **_kwargs):
+            return subprocess.CompletedProcess(cmd, 0, "converted", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.hwp"
+            preview = Path(tmp) / "sample.hwp.preview.pdf"
+            path.write_bytes(b"hwp")
+            preview.write_bytes(b"old preview")
+
+            with (
+                patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
+                patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
+                patch.object(file_handler, "_find_libreoffice", return_value="soffice"),
+                patch.object(file_handler.subprocess, "run", side_effect=fake_run_without_output),
+            ):
+                metadata = convert_to_pdf_preview(path, "hwp", force=True)
+            preview_bytes = preview.read_bytes()
+
+        self.assertEqual(preview_bytes, b"old preview")
+        self.assertEqual(metadata["conversion_status"], "failed")
+        self.assertIsNone(metadata["preview_pdf_path"])
+
+    def test_convert_to_pdf_preview_marks_converter_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.hwp"
+            path.write_bytes(b"hwp")
+
+            with (
+                patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
+                patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
+                patch.object(file_handler, "_find_libreoffice", return_value=None),
+            ):
+                metadata = convert_to_pdf_preview(path, "hwp")
+
+        self.assertEqual(metadata["conversion_status"], "unavailable")
+        self.assertIsNone(metadata["preview_pdf_path"])
 
 
 class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
@@ -171,6 +279,32 @@ class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attachment["parser"], "pdfplumber")
         self.assertEqual(attachment["parse_quality"], "none")
         self.assertEqual(attachment["extracted_chars"], 0)
+
+    async def test_process_attachments_includes_hwp_pdf_preview_status(self):
+        async def fake_download(_url: str, save_path: Path) -> bool:
+            save_path.write_bytes(b"hwp")
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            files_dir = Path(tmp)
+            with (
+                patch.object(file_handler, "FILES_DIR", files_dir),
+                patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
+                patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
+                patch.object(file_handler, "download_file", new=AsyncMock(side_effect=fake_download)),
+                patch.object(file_handler, "extract_text", return_value=("HWP text", "pyhwp_bodytext")),
+                patch.object(file_handler, "_find_libreoffice", return_value=None),
+            ):
+                results = await process_attachments(
+                    [{"name": "sample.hwp", "url": "https://example.test/sample.hwp", "ext": "hwp"}],
+                    "SW_1",
+                )
+
+        attachment = results[0]
+        self.assertTrue(attachment["parse_ok"])
+        self.assertEqual(attachment["parse_quality"], "full")
+        self.assertEqual(attachment["conversion_status"], "unavailable")
+        self.assertIsNone(attachment["preview_pdf_path"])
 
 
 if __name__ == "__main__":
