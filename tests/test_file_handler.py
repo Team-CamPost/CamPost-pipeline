@@ -120,6 +120,29 @@ class FileHandlerTests(unittest.TestCase):
         self.assertEqual(metadata["conversion_status"], "success")
         self.assertEqual(metadata["preview_pdf_path"], "files/sample.hwp.preview.pdf")
 
+    def test_convert_to_pdf_preview_does_not_report_stale_preview_as_success(self):
+        def fake_run_without_output(cmd, **_kwargs):
+            return subprocess.CompletedProcess(cmd, 0, "converted", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.hwp"
+            preview = Path(tmp) / "sample.hwp.preview.pdf"
+            path.write_bytes(b"hwp")
+            preview.write_bytes(b"old preview")
+
+            with (
+                patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
+                patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
+                patch.object(file_handler, "_find_libreoffice", return_value="soffice"),
+                patch.object(file_handler.subprocess, "run", side_effect=fake_run_without_output),
+            ):
+                metadata = convert_to_pdf_preview(path, "hwp", force=True)
+            preview_bytes = preview.read_bytes()
+
+        self.assertEqual(preview_bytes, b"old preview")
+        self.assertEqual(metadata["conversion_status"], "failed")
+        self.assertIsNone(metadata["preview_pdf_path"])
+
     def test_convert_to_pdf_preview_marks_converter_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sample.hwp"

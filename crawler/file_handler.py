@@ -134,6 +134,7 @@ def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict
     if not force and _is_reusable_pdf_preview(path, output_path):
         return _pdf_preview_success_metadata(output_path)
 
+    converted = False
     try:
         with (
             tempfile.TemporaryDirectory(prefix="campost-lo-") as profile_dir,
@@ -167,6 +168,7 @@ def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict
                 and libreoffice_output_path.stat().st_size > 0
             ):
                 libreoffice_output_path.replace(output_path)
+                converted = True
     except subprocess.TimeoutExpired:
         return _default_pdf_preview_metadata(
             "timeout",
@@ -175,7 +177,7 @@ def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict
     except (OSError, ValueError) as exc:
         return _default_pdf_preview_metadata("failed", str(exc))
 
-    if completed.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
+    if completed.returncode != 0 or not converted:
         error = (completed.stderr or completed.stdout or "PDF output was not created").strip()
         return _default_pdf_preview_metadata("failed", error[:500])
 
