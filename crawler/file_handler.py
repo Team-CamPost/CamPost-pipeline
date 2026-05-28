@@ -8,13 +8,16 @@ HWPX : zipfile + XML 파싱
 
 import asyncio
 import base64
+import errno
 import hashlib
 import logging
 import mimetypes
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
 from functools import lru_cache
 from pathlib import Path
@@ -24,12 +27,13 @@ from xml.etree import ElementTree as ET
 import httpx
 
 from .config import (
+    CHROME_BIN,
     EXTRACTABLE_EXTS,
     FILES_DIR,
-    LIBREOFFICE_BIN,
     PDF_CONVERSION_ENABLED,
     PDF_CONVERSION_TIMEOUT_SECONDS,
     PDF_PREVIEW_EXTS,
+    RHWP_BIN,
     USER_AGENT,
 )
 
@@ -42,6 +46,9 @@ logging.getLogger("hwp5").setLevel(logging.WARNING)
 
 _MAX_INLINE_IMAGES = 10
 _MAX_INLINE_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
+_A4_WIDTH_PX = 793.7066666666667
+_A4_HEIGHT_PX = 1122.5066666666667
+_SVG_ATTR_NUMBER = r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))"
 
 
 def _safe_filename(article_id: str, name: str) -> str:
@@ -78,7 +85,7 @@ def _pdf_preview_success_metadata(path: Path) -> dict:
         "preview_pdf_size": path.stat().st_size,
         "preview_pdf_checksum": _compute_checksum(path),
         "conversion_status": "success",
-        "conversion_engine": "libreoffice",
+        "conversion_engine": "rhwp+chrome",
         "conversion_error": None,
     }
 
@@ -94,26 +101,182 @@ def _is_reusable_pdf_preview(source_path: Path, preview_path: Path) -> bool:
         return False
 
 
+def _replace_file_with_retry(source: Path, target: Path) -> None:
+    last_error: OSError | None = None
+    for _ in range(10):
+        try:
+            source.replace(target)
+            return
+        except OSError as exc:
+            last_error = exc
+            if exc.errno not in {errno.EXDEV, errno.EACCES, errno.EPERM}:
+                raise
+            try:
+                shutil.copy2(source, target)
+                source.unlink(missing_ok=True)
+                return
+            except PermissionError as copy_exc:
+                last_error = copy_exc
+            time.sleep(0.2)
+    if last_error:
+        raise last_error
+
+
+def _is_executable_file(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
+
+
 @lru_cache(maxsize=1)
-def _find_libreoffice() -> str | None:
-    if LIBREOFFICE_BIN:
-        configured = Path(LIBREOFFICE_BIN)
-        if configured.exists():
+def _find_rhwp() -> str | None:
+    if RHWP_BIN:
+        configured = Path(RHWP_BIN)
+        if _is_executable_file(configured):
             return str(configured)
-        resolved = shutil.which(LIBREOFFICE_BIN)
+        resolved = shutil.which(RHWP_BIN)
         if resolved:
             return resolved
 
-    for candidate in ("soffice", "libreoffice"):
+    return shutil.which("rhwp")
+
+
+@lru_cache(maxsize=1)
+def _find_chrome() -> str | None:
+    if CHROME_BIN:
+        configured = Path(CHROME_BIN)
+        if _is_executable_file(configured):
+            return str(configured)
+        resolved = shutil.which(CHROME_BIN)
+        if resolved:
+            return resolved
+
+    for candidate in (
+        "chrome",
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+        "chrome.exe",
+        "msedge.exe",
+    ):
         resolved = shutil.which(candidate)
         if resolved:
             return resolved
+
+    search_roots = []
+    playwright_browsers_path = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if playwright_browsers_path and playwright_browsers_path != "0":
+        search_roots.append(Path(playwright_browsers_path))
+    search_roots.append(Path.home() / ".cache" / "ms-playwright")
+
+    for root in search_roots:
+        for pattern in (
+            "chromium-*/chrome-linux/chrome",
+            "chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+        ):
+            matches = sorted(root.glob(pattern))
+            for match in matches:
+                if _is_executable_file(match):
+                    return str(match)
+
     return None
+
+
+def _svg_attr_number(svg: str, attr: str) -> float | None:
+    match = re.search(
+        rf"<svg\b[^>]*\b{attr}\s*=\s*['\"]\s*{_SVG_ATTR_NUMBER}",
+        svg,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _chrome_args(
+    chrome: str,
+    temp_pdf_path: Path,
+    html_path: Path,
+    *,
+    headless: str,
+    no_sandbox: bool = False,
+) -> list[str]:
+    args = [
+        chrome,
+        headless,
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--no-pdf-header-footer",
+        f"--print-to-pdf={temp_pdf_path}",
+        html_path.resolve().as_uri(),
+    ]
+    if no_sandbox or (hasattr(os, "geteuid") and os.geteuid() == 0):
+        args.insert(3, "--no-sandbox")
+    return args
+
+
+def _extract_svg_size(svg: str) -> tuple[float, float]:
+    width = _svg_attr_number(svg, "width")
+    height = _svg_attr_number(svg, "height")
+    if width is not None and height is not None:
+        return width, height
+
+    viewbox_match = re.search(
+        rf"<svg\b[^>]*\bviewBox\s*=\s*['\"]\s*{_SVG_ATTR_NUMBER}[,\s]+{_SVG_ATTR_NUMBER}[,\s]+{_SVG_ATTR_NUMBER}[,\s]+{_SVG_ATTR_NUMBER}\s*['\"]",
+        svg,
+        re.IGNORECASE,
+    )
+    if viewbox_match:
+        return float(viewbox_match.group(3)), float(viewbox_match.group(4))
+
+    return _A4_WIDTH_PX, _A4_HEIGHT_PX
+
+
+def _build_svg_print_html(svg_paths: list[Path], html_path: Path) -> None:
+    first_svg = svg_paths[0].read_text(encoding="utf-8")
+    width, height = _extract_svg_size(first_svg)
+    pages = []
+    for svg_path in svg_paths:
+        svg = svg_path.read_text(encoding="utf-8")
+        pages.append(f'<section class="page">{svg}</section>')
+
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@page {{ size: {width}px {height}px; margin: 0; }}
+html, body {{ margin: 0; padding: 0; background: white; }}
+.page {{
+  width: {width}px;
+  height: {height}px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  break-after: page;
+  page-break-after: always;
+}}
+.page:last-child {{
+  break-after: auto;
+  page-break-after: auto;
+}}
+svg {{
+  display: block;
+  width: {width}px;
+  height: {height}px;
+}}
+</style>
+</head>
+<body>
+{chr(10).join(pages)}
+</body>
+</html>
+"""
+    html_path.write_text(html, encoding="utf-8")
 
 
 def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict:
     """
-    Convert an HWP/HWPX attachment to a cached PDF preview with LibreOffice.
+    Convert an HWP/HWPX attachment to a cached PDF preview with RHWP + Chrome.
 
     This is best-effort preview generation. The original attachment remains the
     source of truth, and callers should fall back to extracted text or download
@@ -126,59 +289,102 @@ def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict
     if not PDF_CONVERSION_ENABLED:
         return _default_pdf_preview_metadata("disabled", "PDF conversion is disabled")
 
-    converter = _find_libreoffice()
-    if not converter:
-        return _default_pdf_preview_metadata("unavailable", "LibreOffice executable not found")
+    rhwp = _find_rhwp()
+    if not rhwp:
+        return _default_pdf_preview_metadata("unavailable", "RHWP executable not found")
+
+    chrome = _find_chrome()
+    if not chrome:
+        return _default_pdf_preview_metadata("unavailable", "Chrome/Chromium executable not found")
 
     output_path = _pdf_preview_path(path)
     if not force and _is_reusable_pdf_preview(path, output_path):
         return _pdf_preview_success_metadata(output_path)
 
     converted = False
+    chrome_completed = None
     try:
         with (
-            tempfile.TemporaryDirectory(prefix="campost-lo-") as profile_dir,
-            tempfile.TemporaryDirectory(prefix="campost-pdf-") as output_dir,
+            tempfile.TemporaryDirectory(prefix="campost-rhwp-svg-") as svg_dir,
+            tempfile.TemporaryDirectory(prefix="campost-rhwp-pdf-") as pdf_dir,
         ):
-            profile_uri = Path(profile_dir).resolve().as_uri()
-            completed = subprocess.run(
+            svg_root = Path(svg_dir)
+            pdf_root = Path(pdf_dir)
+            rhwp_completed = subprocess.run(
                 [
-                    converter,
-                    "--headless",
-                    "--nologo",
-                    "--nofirststartwizard",
-                    "--nodefault",
-                    "--nolockcheck",
-                    f"-env:UserInstallation={profile_uri}",
-                    "--convert-to",
-                    "pdf",
-                    "--outdir",
-                    output_dir,
+                    rhwp,
+                    "export-svg",
                     str(path),
+                    "-o",
+                    str(svg_root),
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=PDF_CONVERSION_TIMEOUT_SECONDS,
                 check=False,
             )
-            libreoffice_output_path = Path(output_dir) / path.with_suffix(".pdf").name
+            svg_paths = sorted(svg_root.glob("*.svg"))
+            if rhwp_completed.returncode != 0 or not svg_paths:
+                error = (rhwp_completed.stderr or rhwp_completed.stdout or "RHWP SVG output was not created").strip()
+                return _default_pdf_preview_metadata("failed", error[:500])
+
+            html_path = svg_root / "preview.html"
+            temp_pdf_path = pdf_root / "preview.pdf"
+            _build_svg_print_html(svg_paths, html_path)
+
+            chrome_attempts = [
+                ("--headless=new", False),
+                ("--headless", False),
+                ("--headless=new", True),
+                ("--headless", True),
+            ]
+            for headless, no_sandbox in chrome_attempts:
+                temp_pdf_path.unlink(missing_ok=True)
+                chrome_completed = subprocess.run(
+                    _chrome_args(
+                        chrome,
+                        temp_pdf_path,
+                        html_path,
+                        headless=headless,
+                        no_sandbox=no_sandbox,
+                    ),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=PDF_CONVERSION_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                if (
+                    chrome_completed.returncode == 0
+                    and temp_pdf_path.exists()
+                    and temp_pdf_path.stat().st_size > 0
+                ):
+                    break
+
             if (
-                completed.returncode == 0
-                and libreoffice_output_path.exists()
-                and libreoffice_output_path.stat().st_size > 0
+                chrome_completed
+                and chrome_completed.returncode == 0
+                and temp_pdf_path.exists()
+                and temp_pdf_path.stat().st_size > 0
             ):
-                libreoffice_output_path.replace(output_path)
+                _replace_file_with_retry(temp_pdf_path, output_path)
                 converted = True
     except subprocess.TimeoutExpired:
         return _default_pdf_preview_metadata(
             "timeout",
-            f"LibreOffice conversion timed out after {PDF_CONVERSION_TIMEOUT_SECONDS}s",
+            f"RHWP PDF conversion timed out after {PDF_CONVERSION_TIMEOUT_SECONDS}s",
         )
     except (OSError, ValueError) as exc:
         return _default_pdf_preview_metadata("failed", str(exc))
 
-    if completed.returncode != 0 or not converted:
-        error = (completed.stderr or completed.stdout or "PDF output was not created").strip()
+    if not converted:
+        error = "PDF output was not created"
+        if chrome_completed:
+            error = chrome_completed.stderr or chrome_completed.stdout or error
+        error = error.strip()
         return _default_pdf_preview_metadata("failed", error[:500])
 
     return _pdf_preview_success_metadata(output_path)
