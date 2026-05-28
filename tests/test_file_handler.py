@@ -161,11 +161,31 @@ class FileHandlerTests(unittest.TestCase):
                 patch.object(file_handler.subprocess, "run", side_effect=fake_run_without_output),
             ):
                 metadata = convert_to_pdf_preview(path, "hwp", force=True)
-            preview_exists = preview.exists()
+            preview_bytes = preview.read_bytes()
 
-        self.assertFalse(preview_exists)
+        self.assertEqual(preview_bytes, b"old preview")
         self.assertEqual(metadata["conversion_status"], "failed")
         self.assertIsNone(metadata["preview_pdf_path"])
+
+    def test_extract_svg_size_accepts_valid_svg_format_variants(self):
+        cases = [
+            ("<svg width = '100.5' height = '200'></svg>", (100.5, 200.0)),
+            ('<svg viewBox="0, 0, 300, 400"></svg>', (300.0, 400.0)),
+            ("<svg viewBox='-1 -2 500 600'></svg>", (500.0, 600.0)),
+        ]
+
+        for svg, expected in cases:
+            with self.subTest(svg=svg):
+                self.assertEqual(file_handler._extract_svg_size(svg), expected)
+
+    def test_chrome_args_only_disables_sandbox_for_root_user(self):
+        with patch.object(file_handler.os, "geteuid", return_value=1000, create=True):
+            args = file_handler._chrome_args("chrome", Path("out.pdf"), Path.cwd(), headless="--headless")
+        self.assertNotIn("--no-sandbox", args)
+
+        with patch.object(file_handler.os, "geteuid", return_value=0, create=True):
+            args = file_handler._chrome_args("chrome", Path("out.pdf"), Path.cwd(), headless="--headless")
+        self.assertIn("--no-sandbox", args)
 
     def test_convert_to_pdf_preview_marks_rhwp_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:

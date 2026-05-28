@@ -12,6 +12,7 @@ import errno
 import hashlib
 import logging
 import mimetypes
+import os
 import re
 import shutil
 import subprocess
@@ -45,6 +46,9 @@ logging.getLogger("hwp5").setLevel(logging.WARNING)
 
 _MAX_INLINE_IMAGES = 10
 _MAX_INLINE_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
+_A4_WIDTH_PX = 793.7066666666667
+_A4_HEIGHT_PX = 1122.5066666666667
+_SVG_ATTR_NUMBER = r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))"
 
 
 def _safe_filename(article_id: str, name: str) -> str:
@@ -118,11 +122,15 @@ def _replace_file_with_retry(source: Path, target: Path) -> None:
         raise last_error
 
 
+def _is_executable_file(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
+
+
 @lru_cache(maxsize=1)
 def _find_rhwp() -> str | None:
     if RHWP_BIN:
         configured = Path(RHWP_BIN)
-        if configured.exists():
+        if _is_executable_file(configured):
             return str(configured)
         resolved = shutil.which(RHWP_BIN)
         if resolved:
@@ -135,7 +143,7 @@ def _find_rhwp() -> str | None:
 def _find_chrome() -> str | None:
     if CHROME_BIN:
         configured = Path(CHROME_BIN)
-        if configured.exists():
+        if _is_executable_file(configured):
             return str(configured)
         resolved = shutil.which(CHROME_BIN)
         if resolved:
@@ -154,26 +162,73 @@ def _find_chrome() -> str | None:
         if resolved:
             return resolved
 
-    for pattern in (
-        "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
-        "/root/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
-    ):
-        matches = sorted(Path("/").glob(pattern.removeprefix("/")))
-        if matches:
-            return str(matches[0])
+    search_roots = []
+    playwright_browsers_path = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if playwright_browsers_path and playwright_browsers_path != "0":
+        search_roots.append(Path(playwright_browsers_path))
+    search_roots.append(Path.home() / ".cache" / "ms-playwright")
+
+    for root in search_roots:
+        for pattern in (
+            "chromium-*/chrome-linux/chrome",
+            "chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+        ):
+            matches = sorted(root.glob(pattern))
+            for match in matches:
+                if _is_executable_file(match):
+                    return str(match)
 
     return None
 
 
+def _svg_attr_number(svg: str, attr: str) -> float | None:
+    match = re.search(
+        rf"<svg\b[^>]*\b{attr}\s*=\s*['\"]\s*{_SVG_ATTR_NUMBER}",
+        svg,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _chrome_args(
+    chrome: str,
+    temp_pdf_path: Path,
+    html_path: Path,
+    *,
+    headless: str,
+    no_sandbox: bool = False,
+) -> list[str]:
+    args = [
+        chrome,
+        headless,
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--no-pdf-header-footer",
+        f"--print-to-pdf={temp_pdf_path}",
+        html_path.resolve().as_uri(),
+    ]
+    if no_sandbox or (hasattr(os, "geteuid") and os.geteuid() == 0):
+        args.insert(3, "--no-sandbox")
+    return args
+
+
 def _extract_svg_size(svg: str) -> tuple[float, float]:
-    width_match = re.search(r'<svg\b[^>]*\bwidth="([\d.]+)', svg)
-    height_match = re.search(r'<svg\b[^>]*\bheight="([\d.]+)', svg)
-    if width_match and height_match:
-        return float(width_match.group(1)), float(height_match.group(1))
-    viewbox_match = re.search(r'<svg\b[^>]*\bviewBox="[\d.\-]+\s+[\d.\-]+\s+([\d.]+)\s+([\d.]+)"', svg)
+    width = _svg_attr_number(svg, "width")
+    height = _svg_attr_number(svg, "height")
+    if width is not None and height is not None:
+        return width, height
+
+    viewbox_match = re.search(
+        rf"<svg\b[^>]*\bviewBox\s*=\s*['\"]\s*{_SVG_ATTR_NUMBER}[,\s]+{_SVG_ATTR_NUMBER}[,\s]+{_SVG_ATTR_NUMBER}[,\s]+{_SVG_ATTR_NUMBER}\s*['\"]",
+        svg,
+        re.IGNORECASE,
+    )
     if viewbox_match:
-        return float(viewbox_match.group(1)), float(viewbox_match.group(2))
-    return 793.7066666666667, 1122.5066666666667
+        return float(viewbox_match.group(3)), float(viewbox_match.group(4))
+
+    return _A4_WIDTH_PX, _A4_HEIGHT_PX
 
 
 def _build_svg_print_html(svg_paths: list[Path], html_path: Path) -> None:
@@ -247,10 +302,8 @@ def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict
         return _pdf_preview_success_metadata(output_path)
 
     converted = False
+    chrome_completed = None
     try:
-        if output_path.exists():
-            output_path.unlink()
-
         with (
             tempfile.TemporaryDirectory(prefix="campost-rhwp-svg-") as svg_dir,
             tempfile.TemporaryDirectory(prefix="campost-rhwp-pdf-") as pdf_dir,
@@ -281,26 +334,39 @@ def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict
             temp_pdf_path = pdf_root / "preview.pdf"
             _build_svg_print_html(svg_paths, html_path)
 
-            chrome_completed = subprocess.run(
-                [
-                    chrome,
-                    "--headless=new",
-                    "--disable-gpu",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--no-pdf-header-footer",
-                    f"--print-to-pdf={temp_pdf_path}",
-                    html_path.resolve().as_uri(),
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=PDF_CONVERSION_TIMEOUT_SECONDS,
-                check=False,
-            )
+            chrome_attempts = [
+                ("--headless=new", False),
+                ("--headless", False),
+                ("--headless=new", True),
+                ("--headless", True),
+            ]
+            for headless, no_sandbox in chrome_attempts:
+                temp_pdf_path.unlink(missing_ok=True)
+                chrome_completed = subprocess.run(
+                    _chrome_args(
+                        chrome,
+                        temp_pdf_path,
+                        html_path,
+                        headless=headless,
+                        no_sandbox=no_sandbox,
+                    ),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=PDF_CONVERSION_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                if (
+                    chrome_completed.returncode == 0
+                    and temp_pdf_path.exists()
+                    and temp_pdf_path.stat().st_size > 0
+                ):
+                    break
+
             if (
-                chrome_completed.returncode == 0
+                chrome_completed
+                and chrome_completed.returncode == 0
                 and temp_pdf_path.exists()
                 and temp_pdf_path.stat().st_size > 0
             ):
@@ -315,9 +381,10 @@ def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict
         return _default_pdf_preview_metadata("failed", str(exc))
 
     if not converted:
-        if output_path.exists():
-            output_path.unlink(missing_ok=True)
-        error = (chrome_completed.stderr or chrome_completed.stdout or "PDF output was not created").strip()
+        error = "PDF output was not created"
+        if chrome_completed:
+            error = chrome_completed.stderr or chrome_completed.stdout or error
+        error = error.strip()
         return _default_pdf_preview_metadata("failed", error[:500])
 
     return _pdf_preview_success_metadata(output_path)
