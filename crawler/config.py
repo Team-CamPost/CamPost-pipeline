@@ -134,7 +134,8 @@ PDF_PREVIEW_EXTS = {
 }
 PDF_CONVERSION_ENABLED: bool = os.getenv("PDF_CONVERSION_ENABLED", "true").lower() != "false"
 PDF_CONVERSION_TIMEOUT_SECONDS: int = int(os.getenv("PDF_CONVERSION_TIMEOUT_SECONDS", "60"))
-LIBREOFFICE_BIN: str = os.getenv("LIBREOFFICE_BIN", "").strip()
+RHWP_BIN: str = os.getenv("RHWP_BIN", "").strip()
+CHROME_BIN: str = os.getenv("CHROME_BIN", "").strip()
 
 # ── DB 연결 (crawl_jobs / parse_logs 쓰기 전용) ──────────
 DB_HOST = os.getenv("DB_HOST", "db")

@@ -53,9 +53,16 @@ class FileHandlerTests(unittest.TestCase):
 
     def test_convert_to_pdf_preview_records_success_metadata(self):
         def fake_run(cmd, **_kwargs):
-            out_dir = Path(cmd[cmd.index("--outdir") + 1])
-            source = Path(cmd[-1])
-            (out_dir / source.with_suffix(".pdf").name).write_bytes(b"%PDF-preview")
+            if cmd[1] == "export-svg":
+                out_dir = Path(cmd[cmd.index("-o") + 1])
+                (out_dir / "page_0001.svg").write_text(
+                    '<svg width="100" height="200" viewBox="0 0 100 200"></svg>',
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(cmd, 0, "exported", "")
+
+            pdf_arg = next(arg for arg in cmd if arg.startswith("--print-to-pdf="))
+            Path(pdf_arg.split("=", 1)[1]).write_bytes(b"%PDF-preview")
             return subprocess.CompletedProcess(cmd, 0, "converted", "")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -65,22 +72,30 @@ class FileHandlerTests(unittest.TestCase):
             with (
                 patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
                 patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
-                patch.object(file_handler, "_find_libreoffice", return_value="soffice"),
+                patch.object(file_handler, "_find_rhwp", return_value="rhwp"),
+                patch.object(file_handler, "_find_chrome", return_value="chrome"),
                 patch.object(file_handler.subprocess, "run", side_effect=fake_run),
             ):
                 metadata = convert_to_pdf_preview(path, "hwp")
 
         self.assertEqual(metadata["conversion_status"], "success")
-        self.assertEqual(metadata["conversion_engine"], "libreoffice")
+        self.assertEqual(metadata["conversion_engine"], "rhwp+chrome")
         self.assertEqual(metadata["preview_pdf_path"], "files/sample.hwp.preview.pdf")
         self.assertEqual(metadata["preview_pdf_size"], len(b"%PDF-preview"))
         self.assertRegex(metadata["preview_pdf_checksum"], r"^[0-9a-f]{64}$")
 
     def test_convert_to_pdf_preview_does_not_overwrite_pdf_attachment(self):
         def fake_run(cmd, **_kwargs):
-            out_dir = Path(cmd[cmd.index("--outdir") + 1])
-            source = Path(cmd[-1])
-            (out_dir / source.with_suffix(".pdf").name).write_bytes(b"%PDF-preview")
+            if cmd[1] == "export-svg":
+                out_dir = Path(cmd[cmd.index("-o") + 1])
+                (out_dir / "page_0001.svg").write_text(
+                    '<svg width="100" height="200" viewBox="0 0 100 200"></svg>',
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(cmd, 0, "exported", "")
+
+            pdf_arg = next(arg for arg in cmd if arg.startswith("--print-to-pdf="))
+            Path(pdf_arg.split("=", 1)[1]).write_bytes(b"%PDF-preview")
             return subprocess.CompletedProcess(cmd, 0, "converted", "")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -92,7 +107,8 @@ class FileHandlerTests(unittest.TestCase):
             with (
                 patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
                 patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
-                patch.object(file_handler, "_find_libreoffice", return_value="soffice"),
+                patch.object(file_handler, "_find_rhwp", return_value="rhwp"),
+                patch.object(file_handler, "_find_chrome", return_value="chrome"),
                 patch.object(file_handler.subprocess, "run", side_effect=fake_run),
             ):
                 metadata = convert_to_pdf_preview(path, "hwp")
@@ -111,7 +127,8 @@ class FileHandlerTests(unittest.TestCase):
             with (
                 patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
                 patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
-                patch.object(file_handler, "_find_libreoffice", return_value="soffice"),
+                patch.object(file_handler, "_find_rhwp", return_value="rhwp"),
+                patch.object(file_handler, "_find_chrome", return_value="chrome"),
                 patch.object(file_handler.subprocess, "run") as run,
             ):
                 metadata = convert_to_pdf_preview(path, "hwp")
@@ -122,6 +139,12 @@ class FileHandlerTests(unittest.TestCase):
 
     def test_convert_to_pdf_preview_does_not_report_stale_preview_as_success(self):
         def fake_run_without_output(cmd, **_kwargs):
+            if cmd[1] == "export-svg":
+                out_dir = Path(cmd[cmd.index("-o") + 1])
+                (out_dir / "page_0001.svg").write_text(
+                    '<svg width="100" height="200" viewBox="0 0 100 200"></svg>',
+                    encoding="utf-8",
+                )
             return subprocess.CompletedProcess(cmd, 0, "converted", "")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -133,17 +156,18 @@ class FileHandlerTests(unittest.TestCase):
             with (
                 patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
                 patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
-                patch.object(file_handler, "_find_libreoffice", return_value="soffice"),
+                patch.object(file_handler, "_find_rhwp", return_value="rhwp"),
+                patch.object(file_handler, "_find_chrome", return_value="chrome"),
                 patch.object(file_handler.subprocess, "run", side_effect=fake_run_without_output),
             ):
                 metadata = convert_to_pdf_preview(path, "hwp", force=True)
-            preview_bytes = preview.read_bytes()
+            preview_exists = preview.exists()
 
-        self.assertEqual(preview_bytes, b"old preview")
+        self.assertFalse(preview_exists)
         self.assertEqual(metadata["conversion_status"], "failed")
         self.assertIsNone(metadata["preview_pdf_path"])
 
-    def test_convert_to_pdf_preview_marks_converter_unavailable(self):
+    def test_convert_to_pdf_preview_marks_rhwp_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sample.hwp"
             path.write_bytes(b"hwp")
@@ -151,7 +175,7 @@ class FileHandlerTests(unittest.TestCase):
             with (
                 patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
                 patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
-                patch.object(file_handler, "_find_libreoffice", return_value=None),
+                patch.object(file_handler, "_find_rhwp", return_value=None),
             ):
                 metadata = convert_to_pdf_preview(path, "hwp")
 
@@ -293,7 +317,7 @@ class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
                 patch.object(file_handler, "download_file", new=AsyncMock(side_effect=fake_download)),
                 patch.object(file_handler, "extract_text", return_value=("HWP text", "pyhwp_bodytext")),
-                patch.object(file_handler, "_find_libreoffice", return_value=None),
+                patch.object(file_handler, "_find_rhwp", return_value=None),
             ):
                 results = await process_attachments(
                     [{"name": "sample.hwp", "url": "https://example.test/sample.hwp", "ext": "hwp"}],

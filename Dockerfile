@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
@@ -10,8 +10,16 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
     libxrandr2 libgbm1 libasound2 \
     fontconfig fonts-dejavu-core fonts-liberation fonts-noto-cjk \
-    libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
+
+ARG RHWP_VERSION=v0.7.10
+RUN curl -L "https://github.com/edwardkim/rhwp/releases/download/${RHWP_VERSION}/rhwp-${RHWP_VERSION}-linux-x86_64.tar.gz" \
+    -o /tmp/rhwp.tar.gz \
+    && mkdir -p /tmp/rhwp \
+    && tar -xzf /tmp/rhwp.tar.gz -C /tmp/rhwp \
+    && find /tmp/rhwp -type f -name rhwp -exec install -m 0755 {} /usr/local/bin/rhwp \; \
+    && test -x /usr/local/bin/rhwp \
+    && rm -rf /tmp/rhwp /tmp/rhwp.tar.gz
 
 # Python 의존성
 COPY requirements.txt .
