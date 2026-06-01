@@ -671,7 +671,7 @@ async def extract_external_images(body_html: str, article_id: str) -> list[dict]
 
         file_size = save_path.stat().st_size
         checksum = _compute_checksum(save_path)
-        r2_url = upload_to_r2(save_path, f"files/{filename}", mime_type)
+        r2_url = await asyncio.to_thread(upload_to_r2, save_path, f"files/{filename}", mime_type)
         log.info(f"  외부 이미지 저장: {filename} ({file_size:,} bytes)")
         results.append(
             {
@@ -822,13 +822,17 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
         )
         mime_type = _get_mime_type(att["name"])
 
-        r2_url = upload_to_r2(save_path, f"files/{filename}", mime_type) if download_ok else None
+        r2_url = (
+            await asyncio.to_thread(upload_to_r2, save_path, f"files/{filename}", mime_type)
+            if download_ok
+            else None
+        )
 
         preview_pdf_r2_url = None
         if pdf_preview["conversion_status"] == "success":
             preview_path = _pdf_preview_path(save_path)
-            preview_pdf_r2_url = upload_to_r2(
-                preview_path, f"files/{preview_path.name}", "application/pdf"
+            preview_pdf_r2_url = await asyncio.to_thread(
+                upload_to_r2, preview_path, f"files/{preview_path.name}", "application/pdf"
             )
 
         results.append(
