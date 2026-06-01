@@ -149,3 +149,13 @@ DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 AI_ENABLED: bool = bool(GEMINI_API_KEY)
+
+# ── Cloudflare R2 Object Storage ─────────────────────────
+R2_ACCOUNT_ID: str = os.getenv("R2_ACCOUNT_ID", "").strip()
+R2_ACCESS_KEY_ID: str = os.getenv("R2_ACCESS_KEY_ID", "").strip()
+R2_SECRET_ACCESS_KEY: str = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
+R2_BUCKET_NAME: str = os.getenv("R2_BUCKET_NAME", "campost-files").strip()
+R2_PUBLIC_URL: str = os.getenv("R2_PUBLIC_URL", "").strip()
+R2_ENABLED: bool = bool(
+    R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_PUBLIC_URL
+)

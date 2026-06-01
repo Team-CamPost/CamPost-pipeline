@@ -13,3 +13,4 @@ psycopg2-binary>=2.9
 google-genai>=1.0
 pyhwp>=0.1b15
 six>=1.16
+boto3>=1.36.5
