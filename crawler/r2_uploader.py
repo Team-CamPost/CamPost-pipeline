@@ -3,7 +3,16 @@
 import logging
 from pathlib import Path
 
+from botocore.config import Config
+
 log = logging.getLogger("campost.r2")
+
+# boto3 1.36+ sends checksum headers by default; R2 does not support them.
+# "when_required" disables automatic checksum injection for standard uploads.
+_R2_CONFIG = Config(
+    request_checksum_calculation="when_required",
+    response_checksum_validation="when_required",
+)
 
 _client = None
 
@@ -22,6 +31,7 @@ def _get_client():
         aws_access_key_id=R2_ACCESS_KEY_ID,
         aws_secret_access_key=R2_SECRET_ACCESS_KEY,
         region_name="auto",
+        config=_R2_CONFIG,
     )
     return _client
 
