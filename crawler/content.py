@@ -189,19 +189,20 @@ def _rewrite_body_image_sources(
             continue
 
         local_path = attachment["local_path"]
+        display_src = attachment.get("r2_url") or local_path
         file_key = attachment.get("file_key") or attachment.get("name") or local_path
         used_file_keys.add(file_key)
         body_images.append(
             {
                 "file_key": file_key,
                 "name": attachment.get("name") or file_key,
-                "src": local_path,
+                "src": display_src,
                 "original_src": src,
                 "mime_type": attachment.get("mime_type"),
                 "file_size": attachment.get("file_size"),
             }
         )
-        image["src"] = local_path
+        image["src"] = display_src
         image.attrs.pop("srcset", None)
         image.attrs.pop("sizes", None)
 
@@ -229,7 +230,7 @@ def _image_attachment_gallery(
             continue
 
         name = attachment.get("name") or file_key
-        src = attachment["local_path"]
+        src = attachment.get("r2_url") or attachment["local_path"]
         gallery_images.append(
             {
                 "file_key": file_key,
@@ -241,9 +242,9 @@ def _image_attachment_gallery(
             }
         )
         figures.append(
-            "<figure class=\"notice-content-image\">"
-            f"<img src=\"{html.escape(src, quote=True)}\" "
-            f"alt=\"{html.escape(name, quote=True)}\" loading=\"lazy\">"
+            '<figure class="notice-content-image">'
+            f'<img src="{html.escape(src, quote=True)}" '
+            f'alt="{html.escape(name, quote=True)}" loading="lazy">'
             f"<figcaption>{html.escape(name)}</figcaption>"
             "</figure>"
         )
@@ -252,9 +253,7 @@ def _image_attachment_gallery(
         return "", gallery_images
 
     return (
-        "<section class=\"notice-content-image-attachments\">"
-        + "".join(figures)
-        + "</section>"
+        '<section class="notice-content-image-attachments">' + "".join(figures) + "</section>"
     ), gallery_images
 
 
