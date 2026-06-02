@@ -36,11 +36,13 @@ from .config import (
     RHWP_BIN,
     USER_AGENT,
 )
-from .r2_storage import upload_file_to_r2
+from .r2_uploader import upload_to_r2
 
 mimetypes.add_type("application/x-hwp", ".hwp")
 mimetypes.add_type("application/x-hwpx", ".hwpx")
-mimetypes.add_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx")
+mimetypes.add_type(
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"
+)
 
 log = logging.getLogger("campost.file_handler")
 logging.getLogger("hwp5").setLevel(logging.WARNING)
@@ -328,7 +330,11 @@ def convert_to_pdf_preview(path: Path, ext: str, *, force: bool = False) -> dict
             )
             svg_paths = sorted(svg_root.glob("*.svg"))
             if rhwp_completed.returncode != 0 or not svg_paths:
-                error = (rhwp_completed.stderr or rhwp_completed.stdout or "RHWP SVG output was not created").strip()
+                error = (
+                    rhwp_completed.stderr
+                    or rhwp_completed.stdout
+                    or "RHWP SVG output was not created"
+                ).strip()
                 return _default_pdf_preview_metadata("failed", error[:500])
 
             html_path = svg_root / "preview.html"
@@ -671,7 +677,11 @@ async def extract_external_images(body_html: str, article_id: str, base_url: str
         if raw_ext not in ("jpg", "jpeg", "png", "gif", "webp", "svg"):
             raw_ext = "jpg"
 
-        mime_type = "image/svg+xml" if raw_ext == "svg" else "image/" + ("jpeg" if raw_ext == "jpg" else raw_ext)
+        mime_type = (
+            "image/svg+xml"
+            if raw_ext == "svg"
+            else "image/" + ("jpeg" if raw_ext == "jpg" else raw_ext)
+        )
 
         filename = _safe_filename(article_id, f"ext_img_{count}.{raw_ext}")
         save_path = FILES_DIR / filename
@@ -682,22 +692,26 @@ async def extract_external_images(body_html: str, article_id: str, base_url: str
 
         file_size = save_path.stat().st_size
         checksum = _compute_checksum(save_path)
+        r2_url = await asyncio.to_thread(upload_to_r2, save_path, f"files/{filename}", mime_type)
         log.info(f"  외부 이미지 저장: {filename} ({file_size:,} bytes)")
-        results.append({
-            "name": filename,
-            "url": url,
-            "original_url": raw_url,
-            "ext": raw_ext,
-            "file_key": filename,
-            "local_path": f"files/{filename}",
-            "mime_type": mime_type,
-            "file_size": file_size,
-            "checksum": checksum,
-            "extracted_text": "",
-            "download_ok": True,
-            "parser": "none",
-            "parse_ok": False,
-        })
+        results.append(
+            {
+                "name": filename,
+                "url": url,
+                "original_url": raw_url,
+                "ext": raw_ext,
+                "file_key": filename,
+                "local_path": f"files/{filename}",
+                "r2_url": r2_url,
+                "mime_type": mime_type,
+                "file_size": file_size,
+                "checksum": checksum,
+                "extracted_text": "",
+                "download_ok": True,
+                "parser": "none",
+                "parse_ok": False,
+            }
+        )
         count += 1
 
     return results
@@ -709,7 +723,7 @@ def extract_inline_images(body_html: str, article_id: str) -> list[dict]:
     이미지 전용 공지(텍스트 없이 포스터 이미지만 있는 경우)를 처리하기 위해 사용.
     최대 10개, 개당 10MB 초과 시 건너뜀.
     """
-    pattern = r'data:image/(jpeg|png|gif|webp);base64,([A-Za-z0-9+/=]+)'
+    pattern = r"data:image/(jpeg|png|gif|webp);base64,([A-Za-z0-9+/=]+)"
     matches = re.findall(pattern, body_html)
 
     if len(matches) > _MAX_INLINE_IMAGES:
@@ -737,21 +751,25 @@ def extract_inline_images(body_html: str, article_id: str) -> list[dict]:
             save_path.write_bytes(base64.b64decode(b64_data, validate=True))
             file_size = save_path.stat().st_size
             checksum = _compute_checksum(save_path)
+            r2_url = upload_to_r2(save_path, f"files/{filename}", f"image/{img_type}")
             log.info(f"  인라인 이미지 저장: {filename} ({file_size:,} bytes)")
-            results.append({
-                "name": filename,
-                "url": "",
-                "ext": ext,
-                "file_key": filename,
-                "local_path": f"files/{filename}",
-                "mime_type": f"image/{img_type}",
-                "file_size": file_size,
-                "checksum": checksum,
-                "extracted_text": "",
-                "download_ok": True,
-                "parser": "none",
-                "parse_ok": False,
-            })
+            results.append(
+                {
+                    "name": filename,
+                    "url": "",
+                    "ext": ext,
+                    "file_key": filename,
+                    "local_path": f"files/{filename}",
+                    "r2_url": r2_url,
+                    "mime_type": f"image/{img_type}",
+                    "file_size": file_size,
+                    "checksum": checksum,
+                    "extracted_text": "",
+                    "download_ok": True,
+                    "parser": "none",
+                    "parse_ok": False,
+                }
+            )
         except Exception as exc:
             log.warning(f"  인라인 이미지 저장 실패 ({filename}): {exc}")
     return results
@@ -817,28 +835,28 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
         )
         file_key = filename
         checksum = _compute_checksum(save_path) if download_ok else None
-        file_size = cached_file_size if download_cached else save_path.stat().st_size if download_ok else None
+        file_size = (
+            cached_file_size
+            if download_cached
+            else save_path.stat().st_size
+            if download_ok
+            else None
+        )
         mime_type = _get_mime_type(att["name"])
         local_path = f"files/{filename}"
 
         r2_url = att.get("r2_url")
         preview_pdf_r2_url = att.get("preview_pdf_r2_url")
         if download_ok:
-            uploaded_r2_url = await asyncio.to_thread(
-                upload_file_to_r2,
-                save_path,
-                local_path,
-                mime_type,
-            )
+            uploaded_r2_url = await asyncio.to_thread(upload_to_r2, save_path, local_path, mime_type)
             r2_url = uploaded_r2_url or r2_url
 
-            preview_pdf_path = pdf_preview.get("preview_pdf_path")
-            preview_file = _resolve_files_path(preview_pdf_path)
-            if pdf_preview.get("conversion_status") == "success" and preview_file:
+            if pdf_preview.get("conversion_status") == "success":
+                preview_path = _pdf_preview_path(save_path)
                 uploaded_preview_r2_url = await asyncio.to_thread(
-                    upload_file_to_r2,
-                    preview_file,
-                    str(preview_pdf_path).replace("\\", "/"),
+                    upload_to_r2,
+                    preview_path,
+                    f"files/{preview_path.name}",
                     "application/pdf",
                 )
                 preview_pdf_r2_url = uploaded_preview_r2_url or preview_pdf_r2_url

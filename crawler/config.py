@@ -140,9 +140,17 @@ CHROME_BIN: str = os.getenv("CHROME_BIN", "").strip()
 R2_ACCOUNT_ID: str = os.getenv("R2_ACCOUNT_ID", "").strip()
 R2_ACCESS_KEY_ID: str = os.getenv("R2_ACCESS_KEY_ID", "").strip()
 R2_SECRET_ACCESS_KEY: str = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
-R2_BUCKET_NAME: str = os.getenv("R2_BUCKET_NAME", "").strip()
+R2_BUCKET_NAME: str = os.getenv("R2_BUCKET_NAME", "campost-files").strip()
 R2_PUBLIC_URL: str = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
 R2_UPLOAD_ENABLED: bool = os.getenv("R2_UPLOAD_ENABLED", "true").lower() != "false"
+R2_ENABLED: bool = bool(
+    R2_UPLOAD_ENABLED
+    and R2_ACCOUNT_ID
+    and R2_ACCESS_KEY_ID
+    and R2_SECRET_ACCESS_KEY
+    and R2_BUCKET_NAME
+    and R2_PUBLIC_URL
+)
 
 BACKEND_IMPORT_URL: str = os.getenv("BACKEND_IMPORT_URL", "").strip()
 IMPORTER_API_TOKEN: str = os.getenv("IMPORTER_API_TOKEN", "").strip()
@@ -160,3 +168,5 @@ DB_SSLMODE = os.getenv("DB_SSLMODE", "").strip()
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 AI_ENABLED: bool = bool(GEMINI_API_KEY)
+
+# ── Cloudflare R2 Object Storage ─────────────────────────
