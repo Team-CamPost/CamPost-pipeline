@@ -21,6 +21,8 @@ services:
         sync: false
       - key: DB_PORT
         value: 5432
+      - key: DB_SSLMODE
+        value: require
       - key: CRAWL_INTERVAL_MINUTES
         value: 60
       - key: HEADLESS

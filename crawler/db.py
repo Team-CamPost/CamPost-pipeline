@@ -11,20 +11,23 @@ import logging
 
 import psycopg2
 
-from .config import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
+from .config import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_SSLMODE, DB_USER
 
 log = logging.getLogger("campost.db")
 
 
 def _connect():
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        connect_timeout=5,
-    )
+    kwargs = {
+        "host": DB_HOST,
+        "port": DB_PORT,
+        "dbname": DB_NAME,
+        "user": DB_USER,
+        "password": DB_PASSWORD,
+        "connect_timeout": 5,
+    }
+    if DB_SSLMODE:
+        kwargs["sslmode"] = DB_SSLMODE
+    return psycopg2.connect(**kwargs)
 
 
 def create_crawl_job(source_id: int) -> int | None:
