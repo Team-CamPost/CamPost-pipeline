@@ -1,0 +1,111 @@
+name: Crawl notices (scheduled, free)
+
+# Render worker 대체 — GitHub Actions에서 주기적으로 크롤러를 1회 실행하고
+# 결과를 R2 업로드 + 백엔드(/api/v1/importer/raw) HTTP push 한다.
+# 러너는 매 실행 후 사라지므로 영속 상태(중복방지 해시)만 actions/cache로 보존한다.
+
+on:
+  schedule:
+    # UTC 기준. 6시간마다 (하루 4회). 무료 사용량 절약용.
+    # 더 자주 돌리려면 "0 * * * *"(매시간) 등으로. private repo는 월 2,000분 한도 주의.
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {} # 수동 실행 버튼
+
+# 이전 실행이 끝나기 전에 새 스케줄이 겹치지 않도록
+concurrency:
+  group: crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      OUTPUT_DIR: ./data
+      HEADLESS: "true"
+      PDF_CONVERSION_ENABLED: "true"
+      PDF_PREVIEW_EXTS: "hwp,hwpx"
+
+      # AI 추출
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-2.5-flash
+
+      # 백엔드 적재 (HTTP push) — BACKEND_IMPORT_URL 은 전체 경로까지 포함
+      # 예: https://campost-backend.onrender.com/api/v1/importer/raw
+      BACKEND_IMPORT_URL: ${{ secrets.BACKEND_IMPORT_URL }}
+      IMPORTER_API_TOKEN: ${{ secrets.IMPORTER_API_TOKEN }}
+
+      # Cloudflare R2 (첨부/이미지/PDF 프리뷰 저장)
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+      R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+
+      # (선택) crawl_jobs / parse_logs 모니터링 기록 → Neon
+      # 미설정이어도 크롤링은 정상 동작(db.py 가 실패를 무시함).
+      POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_SSLMODE: require
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install RHWP (HWP→SVG 렌더러)
+        run: |
+          set -eux
+          VER=v0.7.10
+          ARCHIVE="rhwp-${VER}-linux-x86_64.tar.gz"
+          cd /tmp
+          curl -fL "https://github.com/edwardkim/rhwp/releases/download/${VER}/${ARCHIVE}" -o "${ARCHIVE}"
+          curl -fL "https://github.com/edwardkim/rhwp/releases/download/${VER}/SHA256SUMS.txt" -o SHA256SUMS.txt
+          grep " ${ARCHIVE}$" SHA256SUMS.txt | sha256sum -c -
+          mkdir -p rhwp && tar -xzf "${ARCHIVE}" -C rhwp
+          sudo find rhwp -type f -name rhwp -exec install -m 0755 {} /usr/local/bin/rhwp \;
+          test -x /usr/local/bin/rhwp
+
+      - name: Install Korean fonts (HWP 프리뷰 한글 렌더링)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk fonts-nanum
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Restore dedup state (seen_hashes)
+        uses: actions/cache@v4
+        with:
+          path: data/seen_hashes.json
+          # run_id 는 매번 달라 정확 매치가 없으므로 항상 새로 저장되고,
+          # restore-keys 접두사로 직전 실행분을 복원한다.
+          key: campost-seen-hashes-${{ github.run_id }}
+          restore-keys: |
+            campost-seen-hashes-
+
+      - name: Warm up backend (Render 무료 콜드스타트 대비)
+        if: ${{ env.BACKEND_IMPORT_URL != '' }}
+        run: |
+          base="${BACKEND_IMPORT_URL%/api/*}"
+          echo "warming up: $base"
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 60 "$base/api/v1/health" || true)
+            echo "attempt $i -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "backend 가 깨어나지 않았지만 계속 진행 (push 는 best-effort)"
+
+      - name: Run crawler (one-shot)
+        run: python main.py
