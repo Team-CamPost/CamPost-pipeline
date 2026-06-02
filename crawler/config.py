@@ -137,12 +137,31 @@ PDF_CONVERSION_TIMEOUT_SECONDS: int = int(os.getenv("PDF_CONVERSION_TIMEOUT_SECO
 RHWP_BIN: str = os.getenv("RHWP_BIN", "").strip()
 CHROME_BIN: str = os.getenv("CHROME_BIN", "").strip()
 
+R2_ACCOUNT_ID: str = os.getenv("R2_ACCOUNT_ID", "").strip()
+R2_ACCESS_KEY_ID: str = os.getenv("R2_ACCESS_KEY_ID", "").strip()
+R2_SECRET_ACCESS_KEY: str = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
+R2_BUCKET_NAME: str = os.getenv("R2_BUCKET_NAME", "campost-files").strip()
+R2_PUBLIC_URL: str = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
+R2_UPLOAD_ENABLED: bool = os.getenv("R2_UPLOAD_ENABLED", "true").lower() != "false"
+R2_ENABLED: bool = bool(
+    R2_UPLOAD_ENABLED
+    and R2_ACCOUNT_ID
+    and R2_ACCESS_KEY_ID
+    and R2_SECRET_ACCESS_KEY
+    and R2_BUCKET_NAME
+    and R2_PUBLIC_URL
+)
+
+BACKEND_IMPORT_URL: str = os.getenv("BACKEND_IMPORT_URL", "").strip()
+IMPORTER_API_TOKEN: str = os.getenv("IMPORTER_API_TOKEN", "").strip()
+
 # ── DB 연결 (crawl_jobs / parse_logs 쓰기 전용) ──────────
 DB_HOST = os.getenv("DB_HOST", "db")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = os.getenv("POSTGRES_DB", "campost")
 DB_USER = os.getenv("POSTGRES_USER", "campost")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+DB_SSLMODE = os.getenv("DB_SSLMODE", "").strip()
 
 # ── Gemini AI 설정 ────────────────────────────────────────
 # GEMINI_API_KEY 미설정 시 AI 추출 비활성화 → regex fallback 사용
@@ -151,11 +170,3 @@ GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 AI_ENABLED: bool = bool(GEMINI_API_KEY)
 
 # ── Cloudflare R2 Object Storage ─────────────────────────
-R2_ACCOUNT_ID: str = os.getenv("R2_ACCOUNT_ID", "").strip()
-R2_ACCESS_KEY_ID: str = os.getenv("R2_ACCESS_KEY_ID", "").strip()
-R2_SECRET_ACCESS_KEY: str = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
-R2_BUCKET_NAME: str = os.getenv("R2_BUCKET_NAME", "campost-files").strip()
-R2_PUBLIC_URL: str = os.getenv("R2_PUBLIC_URL", "").strip()
-R2_ENABLED: bool = bool(
-    R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_PUBLIC_URL
-)
