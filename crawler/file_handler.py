@@ -52,6 +52,9 @@ _MAX_INLINE_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
 _A4_WIDTH_PX = 793.7066666666667
 _A4_HEIGHT_PX = 1122.5066666666667
 _SVG_ATTR_NUMBER = r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))"
+# 콘텐츠가 페이지 밖으로 넘칠 때 페이지를 넓혀 잘림을 방지하기 위한 값
+_OVERFLOW_TOLERANCE = 2.0  # 이 값(px) 초과로 넘칠 때만 페이지 확장 (반올림 오차 무시)
+_OVERFLOW_PAD = 8.0  # 확장 시 우측/하단에 더해줄 여백(px)
 
 
 def _safe_filename(article_id: str, name: str) -> str:
@@ -234,24 +237,107 @@ def _extract_svg_size(svg: str) -> tuple[float, float]:
     return _A4_WIDTH_PX, _A4_HEIGHT_PX
 
 
+def _svg_content_extent(svg: str) -> tuple[float, float]:
+    """rect/image 요소 기준 콘텐츠의 우측·하단 끝(px)을 추정한다.
+
+    HWP 표가 페이지보다 넓게 작성된 경우 rect 셀이 페이지 폭을 넘어가므로,
+    이 값으로 잘림 여부를 판단한다. (텍스트만으로 넘치는 드문 경우는 잡지 못함)
+
+    주의: <defs> 안의 clipPath/mask/pattern 정의는 실제로 그려지는 콘텐츠가
+    아니므로(보통 페이지보다 큰 클리핑 영역을 정의함) 계산에서 제외한다.
+    """
+    svg = re.sub(r"<defs\b[^>]*>.*?</defs>", "", svg, flags=re.IGNORECASE | re.DOTALL)
+    right = 0.0
+    bottom = 0.0
+    for match in re.finditer(
+        rf"<(?:rect|image)\b[^>]*?\bx\s*=\s*['\"]\s*{_SVG_ATTR_NUMBER}[^>]*?\bwidth\s*=\s*['\"]\s*{_SVG_ATTR_NUMBER}",
+        svg,
+        re.IGNORECASE,
+    ):
+        right = max(right, float(match.group(1)) + float(match.group(2)))
+    for match in re.finditer(
+        rf"<(?:rect|image)\b[^>]*?\by\s*=\s*['\"]\s*{_SVG_ATTR_NUMBER}[^>]*?\bheight\s*=\s*['\"]\s*{_SVG_ATTR_NUMBER}",
+        svg,
+        re.IGNORECASE,
+    ):
+        bottom = max(bottom, float(match.group(1)) + float(match.group(2)))
+    return right, bottom
+
+
+def _fit_svg_viewport(svg: str, width: float, height: float) -> str:
+    """svg 루트의 width/height/viewBox 를 지정 크기로 맞춰 전체 콘텐츠가 보이게 한다."""
+
+    def _replace_root(match: re.Match) -> str:
+        tag = match.group(0)
+        if re.search(r"\bwidth\s*=", tag, re.IGNORECASE):
+            tag = re.sub(
+                r"\bwidth\s*=\s*['\"][^'\"]*['\"]",
+                f'width="{width}"',
+                tag,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        if re.search(r"\bheight\s*=", tag, re.IGNORECASE):
+            tag = re.sub(
+                r"\bheight\s*=\s*['\"][^'\"]*['\"]",
+                f'height="{height}"',
+                tag,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        if re.search(r"\bviewBox\s*=", tag, re.IGNORECASE):
+            tag = re.sub(
+                r"\bviewBox\s*=\s*['\"][^'\"]*['\"]",
+                f'viewBox="0 0 {width} {height}"',
+                tag,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            tag = tag[:-1].rstrip() + f' viewBox="0 0 {width} {height}">'
+        return tag
+
+    return re.sub(r"<svg\b[^>]*>", _replace_root, svg, count=1)
+
+
 def _build_svg_print_html(svg_paths: list[Path], html_path: Path) -> None:
-    first_svg = svg_paths[0].read_text(encoding="utf-8")
-    width, height = _extract_svg_size(first_svg)
-    pages = []
+    page_width = 0.0
+    page_height = 0.0
+    sections: list[tuple[str, float, float]] = []
     for svg_path in svg_paths:
         svg = svg_path.read_text(encoding="utf-8")
-        pages.append(f'<section class="page">{svg}</section>')
+        decl_width, decl_height = _extract_svg_size(svg)
+        content_right, content_bottom = _svg_content_extent(svg)
+
+        # 콘텐츠가 선언 페이지 크기를 의미 있게(_OVERFLOW_TOLERANCE 초과) 넘을 때만
+        # 페이지/viewBox 를 넓혀 잘림을 방지한다. 정상 문서는 decl 값 그대로 유지되어
+        # 기존 렌더링과 동일하게 동작한다.
+        eff_width = decl_width
+        eff_height = decl_height
+        if content_right > decl_width + _OVERFLOW_TOLERANCE:
+            eff_width = content_right + _OVERFLOW_PAD
+        if content_bottom > decl_height + _OVERFLOW_TOLERANCE:
+            eff_height = content_bottom + _OVERFLOW_PAD
+        if eff_width != decl_width or eff_height != decl_height:
+            svg = _fit_svg_viewport(svg, eff_width, eff_height)
+
+        sections.append((svg, eff_width, eff_height))
+        page_width = max(page_width, eff_width)
+        page_height = max(page_height, eff_height)
+
+    pages = [
+        f'<section class="page" style="width: {w}px; height: {h}px;">{svg}</section>'
+        for svg, w, h in sections
+    ]
 
     html = f"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>
-@page {{ size: {width}px {height}px; margin: 0; }}
+@page {{ size: {page_width}px {page_height}px; margin: 0; }}
 html, body {{ margin: 0; padding: 0; background: white; }}
 .page {{
-  width: {width}px;
-  height: {height}px;
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -264,8 +350,8 @@ html, body {{ margin: 0; padding: 0; background: white; }}
 }}
 svg {{
   display: block;
-  width: {width}px;
-  height: {height}px;
+  width: 100%;
+  height: 100%;
 }}
 </style>
 </head>
