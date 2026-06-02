@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from playwright.async_api import async_playwright
 
+from .backend_importer import submit_raw_file
 from .config import AI_ENABLED, CRAWL_INTERVAL_MINUTES, DETAIL_URL_TEMPLATE, GEMINI_API_KEY, GEMINI_MODEL, HEADLESS, PAGE_TIMEOUT, RAW_STORE_DIR, SOURCES
 from .content import build_content_payload
 from .db import create_crawl_job, finish_crawl_job, log_parse
@@ -115,6 +116,7 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                 external_images = await extract_external_images(
                     detail.get("body_html", ""),
                     item["article_id"],
+                    source["base_url"],
                 )
                 attachments.extend(external_images)
 
@@ -168,7 +170,8 @@ async def run_source(browser, source: dict, seen_hashes: set) -> dict:
                     "content_version": CONTENT_PAYLOAD_VERSION,
                 }
 
-                save_raw_json(notice)
+                raw_path = save_raw_json(notice)
+                await submit_raw_file(raw_path)
                 seen_hashes.add(h)
                 stats["new_count"] += 1
                 log.info(

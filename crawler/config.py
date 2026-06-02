@@ -137,6 +137,16 @@ PDF_CONVERSION_TIMEOUT_SECONDS: int = int(os.getenv("PDF_CONVERSION_TIMEOUT_SECO
 RHWP_BIN: str = os.getenv("RHWP_BIN", "").strip()
 CHROME_BIN: str = os.getenv("CHROME_BIN", "").strip()
 
+R2_ACCOUNT_ID: str = os.getenv("R2_ACCOUNT_ID", "").strip()
+R2_ACCESS_KEY_ID: str = os.getenv("R2_ACCESS_KEY_ID", "").strip()
+R2_SECRET_ACCESS_KEY: str = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
+R2_BUCKET_NAME: str = os.getenv("R2_BUCKET_NAME", "").strip()
+R2_PUBLIC_URL: str = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
+R2_UPLOAD_ENABLED: bool = os.getenv("R2_UPLOAD_ENABLED", "true").lower() != "false"
+
+BACKEND_IMPORT_URL: str = os.getenv("BACKEND_IMPORT_URL", "").strip()
+IMPORTER_API_TOKEN: str = os.getenv("IMPORTER_API_TOKEN", "").strip()
+
 # ── DB 연결 (crawl_jobs / parse_logs 쓰기 전용) ──────────
 DB_HOST = os.getenv("DB_HOST", "db")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))

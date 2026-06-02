@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import json
+import mimetypes
 import sys
 from collections import Counter
 from pathlib import Path
@@ -18,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from crawler.config import OUTPUT_DIR, PDF_PREVIEW_EXTS
 from crawler.file_handler import convert_to_pdf_preview
 from crawler.reprocess import stamp_reprocessed_at
+from crawler.r2_storage import upload_file_to_r2
 
 
 def _resolve_local_path(files_dir: Path, local_path: str | None) -> Path | None:
@@ -29,12 +31,18 @@ def _resolve_local_path(files_dir: Path, local_path: str | None) -> Path | None:
     return files_dir / Path(normalized).name
 
 
+def _content_type(filename: str) -> str:
+    mime_type, _ = mimetypes.guess_type(filename)
+    return mime_type or "application/octet-stream"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate HWP/HWPX PDF previews.")
     parser.add_argument("--root", type=Path, default=OUTPUT_DIR, help="pipeline data root")
     parser.add_argument("--source", help="article id prefix, e.g. SW")
     parser.add_argument("--dry-run", action="store_true", help="print candidates without converting")
     parser.add_argument("--force", action="store_true", help="reconvert attachments with success status")
+    parser.add_argument("--skip-r2", action="store_true", help="do not upload generated files to R2")
     parser.add_argument("--limit", type=int, help="maximum attachments to process")
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
@@ -89,6 +97,25 @@ def main() -> None:
 
             metadata = convert_to_pdf_preview(local_path, ext, force=args.force)
             attachment.update(metadata)
+
+            if not args.skip_r2:
+                local_key = str(attachment.get("local_path") or "").replace("\\", "/")
+                if local_key:
+                    uploaded_url = upload_file_to_r2(local_path, local_key, _content_type(local_path.name))
+                    if uploaded_url:
+                        attachment["r2_url"] = uploaded_url
+
+                preview_pdf_path = str(metadata.get("preview_pdf_path") or "").replace("\\", "/")
+                preview_local_path = _resolve_local_path(files_dir, preview_pdf_path)
+                if metadata["conversion_status"] == "success" and preview_pdf_path and preview_local_path:
+                    uploaded_preview_url = upload_file_to_r2(
+                        preview_local_path,
+                        preview_pdf_path,
+                        "application/pdf",
+                    )
+                    if uploaded_preview_url:
+                        attachment["preview_pdf_r2_url"] = uploaded_preview_url
+
             status_counts[str(metadata["conversion_status"])] += 1
             changed = True
             if metadata["conversion_status"] == "success":

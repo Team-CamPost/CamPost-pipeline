@@ -21,7 +21,7 @@ import time
 import zipfile
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree as ET
 
 import httpx
@@ -36,6 +36,7 @@ from .config import (
     RHWP_BIN,
     USER_AGENT,
 )
+from .r2_storage import upload_file_to_r2
 
 mimetypes.add_type("application/x-hwp", ".hwp")
 mimetypes.add_type("application/x-hwpx", ".hwpx")
@@ -405,6 +406,15 @@ def _get_mime_type(filename: str) -> str:
     return mime or "application/octet-stream"
 
 
+def _resolve_files_path(local_path: str | None) -> Path | None:
+    if not local_path:
+        return None
+    normalized = local_path.replace("\\", "/")
+    if normalized.startswith("files/"):
+        return FILES_DIR / normalized.removeprefix("files/")
+    return FILES_DIR / Path(normalized).name
+
+
 async def download_file(url: str, save_path: Path) -> bool:
     headers = {"User-Agent": USER_AGENT}
     tmp_path = save_path.with_name(f".{save_path.name}.tmp")
@@ -625,21 +635,33 @@ def extract_text(path: Path, ext: str) -> tuple[str, str]:
     return "", "none"
 
 
-async def extract_external_images(body_html: str, article_id: str) -> list[dict]:
+async def extract_external_images(body_html: str, article_id: str, base_url: str = "") -> list[dict]:
     """
     본문 HTML에서 외부 URL <img src="https://..."> 이미지를 다운로드해 저장.
     base64 인라인 이미지는 제외 (extract_inline_images가 처리).
     최대 10개 이미지만 처리한다.
     """
-    pattern = r'<img[^>]+src=["\']?(https?://[^"\'>\s]+)["\']?'
+    pattern = r'<img\b[^>]*\bsrc\s*=\s*["\']?([^"\'>\s]+)["\']?'
     results = []
     urls_seen = set()
     count = 0
 
-    for url in re.findall(pattern, body_html):
+    for raw_url in re.findall(pattern, body_html):
         if count >= _MAX_INLINE_IMAGES:
             log.warning(f"  외부 이미지 개수 제한({_MAX_INLINE_IMAGES}개) 초과, 나머지 건너뜀")
             break
+        raw_url = raw_url.strip()
+        if not raw_url or raw_url.startswith("data:image/"):
+            continue
+
+        url = urljoin(base_url, raw_url) if base_url else raw_url
+        if not url.startswith(("http://", "https://")):
+            continue
+        parsed_url = urlparse(url)
+        parsed_base = urlparse(base_url)
+        if parsed_base.netloc and parsed_url.netloc != parsed_base.netloc:
+            continue
+
         if url in urls_seen:
             continue
         urls_seen.add(url)
@@ -664,6 +686,7 @@ async def extract_external_images(body_html: str, article_id: str) -> list[dict]
         results.append({
             "name": filename,
             "url": url,
+            "original_url": raw_url,
             "ext": raw_ext,
             "file_key": filename,
             "local_path": f"files/{filename}",
@@ -796,15 +819,39 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
         checksum = _compute_checksum(save_path) if download_ok else None
         file_size = cached_file_size if download_cached else save_path.stat().st_size if download_ok else None
         mime_type = _get_mime_type(att["name"])
+        local_path = f"files/{filename}"
+
+        r2_url = att.get("r2_url")
+        preview_pdf_r2_url = att.get("preview_pdf_r2_url")
+        if download_ok:
+            uploaded_r2_url = await asyncio.to_thread(
+                upload_file_to_r2,
+                save_path,
+                local_path,
+                mime_type,
+            )
+            r2_url = uploaded_r2_url or r2_url
+
+            preview_pdf_path = pdf_preview.get("preview_pdf_path")
+            preview_file = _resolve_files_path(preview_pdf_path)
+            if pdf_preview.get("conversion_status") == "success" and preview_file:
+                uploaded_preview_r2_url = await asyncio.to_thread(
+                    upload_file_to_r2,
+                    preview_file,
+                    str(preview_pdf_path).replace("\\", "/"),
+                    "application/pdf",
+                )
+                preview_pdf_r2_url = uploaded_preview_r2_url or preview_pdf_r2_url
 
         results.append(
             {
                 **att,
                 "file_key": file_key,
-                "local_path": f"files/{filename}",
+                "local_path": local_path,
                 "mime_type": mime_type,
                 "file_size": file_size,
                 "checksum": checksum,
+                "r2_url": r2_url,
                 "extracted_text": extracted_text,
                 "extracted_chars": len(extracted_text),
                 "download_ok": download_ok,
@@ -813,6 +860,7 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
                 "parse_quality": parse_quality,
                 "parse_ok": parse_ok,
                 **pdf_preview,
+                "preview_pdf_r2_url": preview_pdf_r2_url,
             }
         )
 
