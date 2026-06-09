@@ -24,27 +24,36 @@ class ExtractorTests(unittest.TestCase):
 
     def test_extract_deadline_time_from_korean_pm_time(self):
         text = "제출 기한은 2026년 5월 24일 오후 4시까지입니다."
-        self.assertEqual(extract_deadline_info(text), {
-            "deadline": "2026-05-24",
-            "deadline_time": "16:00",
-            "deadline_at": "2026-05-24T16:00:00+09:00",
-        })
+        self.assertEqual(
+            extract_deadline_info(text),
+            {
+                "deadline": "2026-05-24",
+                "deadline_time": "16:00",
+                "deadline_at": "2026-05-24T16:00:00+09:00",
+            },
+        )
 
     def test_extract_deadline_time_from_period_end(self):
         text = "신청기간: 2026.05.01 09:00 ~ 2026.05.24 18:00"
-        self.assertEqual(extract_deadline_info(text), {
-            "deadline": "2026-05-24",
-            "deadline_time": "18:00",
-            "deadline_at": "2026-05-24T18:00:00+09:00",
-        })
+        self.assertEqual(
+            extract_deadline_info(text),
+            {
+                "deadline": "2026-05-24",
+                "deadline_time": "18:00",
+                "deadline_at": "2026-05-24T18:00:00+09:00",
+            },
+        )
 
     def test_extract_deadline_time_from_short_date(self):
         text = "신청기간: 4/1 09:00 ~ 4/13(월) 17시까지"
-        self.assertEqual(extract_deadline_info(text, "2026.04.02"), {
-            "deadline": "2026-04-13",
-            "deadline_time": "17:00",
-            "deadline_at": "2026-04-13T17:00:00+09:00",
-        })
+        self.assertEqual(
+            extract_deadline_info(text, "2026.04.02"),
+            {
+                "deadline": "2026-04-13",
+                "deadline_time": "17:00",
+                "deadline_at": "2026-04-13T17:00:00+09:00",
+            },
+        )
 
     def test_event_time_is_not_deadline_time(self):
         text = "예선: 2026. 5. 16(토) 14:00 ~ 16:00 (온라인, 2시간)"
@@ -58,11 +67,14 @@ class ExtractorTests(unittest.TestCase):
         2) 일 시 : 2026. 5. 19.(화) 10:00~16:00
         3) 장 소 : 혜당관~도서관 사이 광장
         """
-        self.assertEqual(extract_deadline_info(text, "2026.05.13"), {
-            "deadline": "2026-05-19",
-            "deadline_time": "16:00",
-            "deadline_at": "2026-05-19T16:00:00+09:00",
-        })
+        self.assertEqual(
+            extract_deadline_info(text, "2026.05.13"),
+            {
+                "deadline": "2026-05-19",
+                "deadline_time": "16:00",
+                "deadline_at": "2026-05-19T16:00:00+09:00",
+            },
+        )
 
     def test_extract_target_from_text(self):
         text = "지원 대상: 3~4학년 재학생"
@@ -168,11 +180,14 @@ class ExtractorTests(unittest.TestCase):
 
     def test_extract_deadline_from_application_approval_period(self):
         text = "신청 및 승인은 2026.03.03.(화) ~ 06.22.(월) 오전11시까지 가능."
-        self.assertEqual(extract_deadline_info(text, "2026.04.08"), {
-            "deadline": "2026-06-22",
-            "deadline_time": "11:00",
-            "deadline_at": "2026-06-22T11:00:00+09:00",
-        })
+        self.assertEqual(
+            extract_deadline_info(text, "2026.04.08"),
+            {
+                "deadline": "2026-06-22",
+                "deadline_time": "11:00",
+                "deadline_at": "2026-06-22T11:00:00+09:00",
+            },
+        )
 
     def test_extract_deadline_from_application_reception_period(self):
         text = """

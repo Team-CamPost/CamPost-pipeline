@@ -15,7 +15,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Find duplicate attachment candidates.")
     parser.add_argument("--root", type=Path, default=OUTPUT_DIR, help="pipeline data root")
     parser.add_argument("--json", action="store_true", help="print full JSON report")
-    parser.add_argument("--limit", type=int, default=20, help="max duplicate groups to print in text mode")
+    parser.add_argument(
+        "--limit", type=int, default=20, help="max duplicate groups to print in text mode"
+    )
     args = parser.parse_args()
 
     raw_dir = args.root / "raw"

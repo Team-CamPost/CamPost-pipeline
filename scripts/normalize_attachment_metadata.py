@@ -15,7 +15,9 @@ from crawler.reprocess import stamp_reprocessed_at
 def main() -> None:
     parser = argparse.ArgumentParser(description="Normalize attachment metadata in raw JSON.")
     parser.add_argument("--root", type=Path, default=OUTPUT_DIR, help="pipeline data root")
-    parser.add_argument("--dry-run", action="store_true", help="print changes without writing files")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print changes without writing files"
+    )
     parser.add_argument(
         "--refresh-file-metadata",
         action="store_true",
@@ -85,7 +87,9 @@ def main() -> None:
             if isinstance(attachment, dict):
                 attachment.update(attachment_change["updates"])
         stamp_reprocessed_at(notice.data)
-        notice.path.write_text(json.dumps(notice.data, ensure_ascii=False, indent=2), encoding="utf-8")
+        notice.path.write_text(
+            json.dumps(notice.data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
 
 if __name__ == "__main__":

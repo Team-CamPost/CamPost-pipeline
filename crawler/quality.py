@@ -57,7 +57,9 @@ def load_raw_notices(raw_dir: Path) -> tuple[list[RawNotice], list[dict[str, str
     return notices, errors
 
 
-def _issue(code: str, article_id: str, message: str, severity: str = "warning", **extra: Any) -> dict[str, Any]:
+def _issue(
+    code: str, article_id: str, message: str, severity: str = "warning", **extra: Any
+) -> dict[str, Any]:
     result = {
         "severity": severity,
         "code": code,
@@ -112,24 +114,52 @@ def audit_content_html(notices: list[RawNotice], files_root: Path | None = None)
         attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
 
         if "content_html" not in data:
-            issues.append(_issue("missing_content_html", article_id, "content_html field is missing", "error"))
+            issues.append(
+                _issue("missing_content_html", article_id, "content_html field is missing", "error")
+            )
             continue
         if not isinstance(content_html, str):
-            issues.append(_issue("invalid_content_html", article_id, "content_html is not a string", "error"))
+            issues.append(
+                _issue("invalid_content_html", article_id, "content_html is not a string", "error")
+            )
             continue
 
         if content_html.strip():
             stats["with_content_html"] += 1
         else:
             stats["empty_content_html"] += 1
-            if body_html or any(str(a.get("ext", "")).lower() in IMAGE_EXTS for a in attachments if isinstance(a, dict)):
-                issues.append(_issue("empty_content_html", article_id, "content_html is empty despite source body or image attachments"))
+            if body_html or any(
+                str(a.get("ext", "")).lower() in IMAGE_EXTS
+                for a in attachments
+                if isinstance(a, dict)
+            ):
+                issues.append(
+                    _issue(
+                        "empty_content_html",
+                        article_id,
+                        "content_html is empty despite source body or image attachments",
+                    )
+                )
 
         if not isinstance(content_assets, dict):
-            issues.append(_issue("missing_content_assets", article_id, "content_assets is missing or invalid", "error"))
+            issues.append(
+                _issue(
+                    "missing_content_assets",
+                    article_id,
+                    "content_assets is missing or invalid",
+                    "error",
+                )
+            )
             content_assets = {}
         if not isinstance(content_stats, dict):
-            issues.append(_issue("missing_content_stats", article_id, "content_stats is missing or invalid", "error"))
+            issues.append(
+                _issue(
+                    "missing_content_stats",
+                    article_id,
+                    "content_stats is missing or invalid",
+                    "error",
+                )
+            )
             content_stats = {}
 
         soup = BeautifulSoup(content_html, "html.parser")
@@ -141,26 +171,63 @@ def audit_content_html(notices: list[RawNotice], files_root: Path | None = None)
             stats["with_images"] += 1
 
         if soup.find("script") or soup.find("iframe") or soup.find("object") or soup.find("embed"):
-            issues.append(_issue("unsafe_tag", article_id, "content_html still contains unsafe tags", "error"))
+            issues.append(
+                _issue("unsafe_tag", article_id, "content_html still contains unsafe tags", "error")
+            )
 
         for tag in soup.find_all(True):
             for attr_name, attr_value in list(tag.attrs.items()):
                 if attr_name.lower().startswith("on"):
-                    issues.append(_issue("unsafe_event_attr", article_id, f"event handler attribute remains: {attr_name}", "error"))
+                    issues.append(
+                        _issue(
+                            "unsafe_event_attr",
+                            article_id,
+                            f"event handler attribute remains: {attr_name}",
+                            "error",
+                        )
+                    )
                 values = attr_value if isinstance(attr_value, list) else [attr_value]
-                if any(isinstance(value, str) and value.strip().lower().startswith("javascript:") for value in values):
-                    issues.append(_issue("unsafe_javascript_url", article_id, f"javascript URL remains on {tag.name}.{attr_name}", "error"))
+                if any(
+                    isinstance(value, str) and value.strip().lower().startswith("javascript:")
+                    for value in values
+                ):
+                    issues.append(
+                        _issue(
+                            "unsafe_javascript_url",
+                            article_id,
+                            f"javascript URL remains on {tag.name}.{attr_name}",
+                            "error",
+                        )
+                    )
 
         for image in images:
             src = str(image.get("src") or "")
             if src.startswith("http://") or src.startswith("https://"):
-                issues.append(_issue("external_image_src", article_id, f"image still points to external URL: {src[:120]}"))
+                issues.append(
+                    _issue(
+                        "external_image_src",
+                        article_id,
+                        f"image still points to external URL: {src[:120]}",
+                    )
+                )
             if src.startswith("data:image"):
-                issues.append(_issue("inline_data_image_src", article_id, "inline data image remains in content_html"))
+                issues.append(
+                    _issue(
+                        "inline_data_image_src",
+                        article_id,
+                        "inline data image remains in content_html",
+                    )
+                )
             if files_root and src.startswith("files/"):
                 resolved = _resolve_local_path(files_root, src)
                 if resolved and not resolved.exists():
-                    issues.append(_issue("missing_content_image_file", article_id, f"content image file is missing: {src}"))
+                    issues.append(
+                        _issue(
+                            "missing_content_image_file",
+                            article_id,
+                            f"content image file is missing: {src}",
+                        )
+                    )
 
         expected_image_count = len(content_assets.get("images") or [])
         expected_file_count = len(content_assets.get("files") or [])
@@ -197,7 +264,13 @@ def audit_content_html(notices: list[RawNotice], files_root: Path | None = None)
                 )
             )
         if expected_image_count and actual_image_count == 0:
-            issues.append(_issue("asset_images_not_rendered", article_id, "content_assets has images but content_html has no img tags"))
+            issues.append(
+                _issue(
+                    "asset_images_not_rendered",
+                    article_id,
+                    "content_assets has images but content_html has no img tags",
+                )
+            )
 
     return {
         "summary": {
@@ -231,12 +304,22 @@ def audit_attachment_quality(notices: list[RawNotice], files_root: Path) -> dict
         if attachments is None:
             continue
         if not isinstance(attachments, list):
-            issues.append(_issue("invalid_attachments", article_id, "attachments is not a list", "error"))
+            issues.append(
+                _issue("invalid_attachments", article_id, "attachments is not a list", "error")
+            )
             continue
 
         for index, attachment in enumerate(attachments):
             if not isinstance(attachment, dict):
-                issues.append(_issue("invalid_attachment_item", article_id, "attachment item is not an object", "error", index=index))
+                issues.append(
+                    _issue(
+                        "invalid_attachment_item",
+                        article_id,
+                        "attachment item is not an object",
+                        "error",
+                        index=index,
+                    )
+                )
                 continue
 
             total_attachments += 1
@@ -257,16 +340,35 @@ def audit_attachment_quality(notices: list[RawNotice], files_root: Path) -> dict
                 conversion_counts[str(conversion_status)] += 1
 
             if download_ok and not local_path:
-                issues.append(_issue("missing_local_path", article_id, "downloaded attachment has no local_path", "error", index=index))
+                issues.append(
+                    _issue(
+                        "missing_local_path",
+                        article_id,
+                        "downloaded attachment has no local_path",
+                        "error",
+                        index=index,
+                    )
+                )
 
             resolved = _resolve_local_path(files_root, local_path)
             if download_ok and resolved and not resolved.exists():
-                issues.append(_issue("missing_attachment_file", article_id, f"downloaded attachment file is missing: {local_path}", "error", index=index))
+                issues.append(
+                    _issue(
+                        "missing_attachment_file",
+                        article_id,
+                        f"downloaded attachment file is missing: {local_path}",
+                        "error",
+                        index=index,
+                    )
+                )
                 resolved = None
 
             if resolved and resolved.exists():
                 actual_size = resolved.stat().st_size
-                if attachment.get("file_size") is not None and attachment.get("file_size") != actual_size:
+                if (
+                    attachment.get("file_size") is not None
+                    and attachment.get("file_size") != actual_size
+                ):
                     issues.append(
                         _issue(
                             "file_size_mismatch",
@@ -281,16 +383,50 @@ def audit_attachment_quality(notices: list[RawNotice], files_root: Path) -> dict
                 if checksum:
                     actual_checksum = _file_sha256(resolved)
                     if actual_checksum and checksum != actual_checksum:
-                        issues.append(_issue("checksum_mismatch", article_id, "attachment checksum does not match disk file", "error", index=index))
+                        issues.append(
+                            _issue(
+                                "checksum_mismatch",
+                                article_id,
+                                "attachment checksum does not match disk file",
+                                "error",
+                                index=index,
+                            )
+                        )
 
             if quality not in ALLOWED_PARSE_QUALITIES:
-                issues.append(_issue("invalid_parse_quality", article_id, f"invalid parse_quality: {quality}", "error", index=index))
+                issues.append(
+                    _issue(
+                        "invalid_parse_quality",
+                        article_id,
+                        f"invalid parse_quality: {quality}",
+                        "error",
+                        index=index,
+                    )
+                )
             if parser == "missing":
-                issues.append(_issue("missing_parser", article_id, "attachment parser is missing", index=index))
+                issues.append(
+                    _issue(
+                        "missing_parser", article_id, "attachment parser is missing", index=index
+                    )
+                )
             if "parse_quality" not in attachment:
-                issues.append(_issue("missing_parse_quality", article_id, "attachment parse_quality is missing", index=index))
+                issues.append(
+                    _issue(
+                        "missing_parse_quality",
+                        article_id,
+                        "attachment parse_quality is missing",
+                        index=index,
+                    )
+                )
             if "extracted_chars" not in attachment:
-                issues.append(_issue("missing_extracted_chars", article_id, "attachment extracted_chars is missing", index=index))
+                issues.append(
+                    _issue(
+                        "missing_extracted_chars",
+                        article_id,
+                        "attachment extracted_chars is missing",
+                        index=index,
+                    )
+                )
             elif extracted_chars != len(extracted_text):
                 issues.append(
                     _issue(
@@ -304,7 +440,14 @@ def audit_attachment_quality(notices: list[RawNotice], files_root: Path) -> dict
                 )
 
             if parse_ok != bool(extracted_text):
-                issues.append(_issue("parse_ok_mismatch", article_id, "parse_ok does not match extracted_text presence", index=index))
+                issues.append(
+                    _issue(
+                        "parse_ok_mismatch",
+                        article_id,
+                        "parse_ok does not match extracted_text presence",
+                        index=index,
+                    )
+                )
 
             expected_quality = _expected_parse_quality(parser, parse_ok)
             if quality in ALLOWED_PARSE_QUALITIES and quality != expected_quality:
@@ -320,9 +463,19 @@ def audit_attachment_quality(notices: list[RawNotice], files_root: Path) -> dict
                 )
 
             if download_ok and ext in EXTRACTABLE_EXTS and parser == "none":
-                issues.append(_issue("extractable_not_parsed", article_id, f"extractable attachment was not parsed: .{ext}", index=index))
+                issues.append(
+                    _issue(
+                        "extractable_not_parsed",
+                        article_id,
+                        f"extractable attachment was not parsed: .{ext}",
+                        index=index,
+                    )
+                )
 
-            if conversion_status is not None and conversion_status not in ALLOWED_CONVERSION_STATUSES:
+            if (
+                conversion_status is not None
+                and conversion_status not in ALLOWED_CONVERSION_STATUSES
+            ):
                 issues.append(
                     _issue(
                         "invalid_conversion_status",
@@ -336,16 +489,40 @@ def audit_attachment_quality(notices: list[RawNotice], files_root: Path) -> dict
             preview_pdf_path = attachment.get("preview_pdf_path")
             if conversion_status == "success":
                 if not preview_pdf_path:
-                    issues.append(_issue("missing_preview_pdf_path", article_id, "successful PDF conversion has no preview_pdf_path", "error", index=index))
+                    issues.append(
+                        _issue(
+                            "missing_preview_pdf_path",
+                            article_id,
+                            "successful PDF conversion has no preview_pdf_path",
+                            "error",
+                            index=index,
+                        )
+                    )
                     continue
                 resolved_pdf = _resolve_local_path(files_root, str(preview_pdf_path))
                 if not resolved_pdf or not resolved_pdf.exists():
-                    issues.append(_issue("missing_preview_pdf_file", article_id, f"preview PDF file is missing: {preview_pdf_path}", "error", index=index))
+                    issues.append(
+                        _issue(
+                            "missing_preview_pdf_file",
+                            article_id,
+                            f"preview PDF file is missing: {preview_pdf_path}",
+                            "error",
+                            index=index,
+                        )
+                    )
                     continue
 
                 actual_pdf_size = resolved_pdf.stat().st_size
                 if attachment.get("preview_pdf_size") is None:
-                    issues.append(_issue("missing_preview_pdf_size", article_id, "successful PDF conversion has no preview_pdf_size", "error", index=index))
+                    issues.append(
+                        _issue(
+                            "missing_preview_pdf_size",
+                            article_id,
+                            "successful PDF conversion has no preview_pdf_size",
+                            "error",
+                            index=index,
+                        )
+                    )
                 elif attachment.get("preview_pdf_size") != actual_pdf_size:
                     issues.append(
                         _issue(
@@ -359,11 +536,27 @@ def audit_attachment_quality(notices: list[RawNotice], files_root: Path) -> dict
                     )
                 preview_checksum = attachment.get("preview_pdf_checksum")
                 if not preview_checksum:
-                    issues.append(_issue("missing_preview_pdf_checksum", article_id, "successful PDF conversion has no preview_pdf_checksum", "error", index=index))
+                    issues.append(
+                        _issue(
+                            "missing_preview_pdf_checksum",
+                            article_id,
+                            "successful PDF conversion has no preview_pdf_checksum",
+                            "error",
+                            index=index,
+                        )
+                    )
                 else:
                     actual_preview_checksum = _file_sha256(resolved_pdf)
                     if actual_preview_checksum and preview_checksum != actual_preview_checksum:
-                        issues.append(_issue("preview_pdf_checksum_mismatch", article_id, "preview_pdf_checksum does not match disk file", "error", index=index))
+                        issues.append(
+                            _issue(
+                                "preview_pdf_checksum_mismatch",
+                                article_id,
+                                "preview_pdf_checksum does not match disk file",
+                                "error",
+                                index=index,
+                            )
+                        )
             elif preview_pdf_path:
                 issues.append(
                     _issue(
@@ -490,7 +683,12 @@ def find_duplicate_attachments(notices: list[RawNotice]) -> dict[str, Any]:
                 by_url[str(url)].append(record)
 
             duplicate_key = (
-                str(attachment.get("checksum") or attachment.get("url") or attachment.get("file_key") or ""),
+                str(
+                    attachment.get("checksum")
+                    or attachment.get("url")
+                    or attachment.get("file_key")
+                    or ""
+                ),
                 str(attachment.get("local_path") or ""),
             )
             if duplicate_key[0]:

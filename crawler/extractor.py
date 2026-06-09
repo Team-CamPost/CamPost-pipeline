@@ -32,9 +32,9 @@ _DEADLINE_PATTERNS = [
     # "2026.04.10(금) 15:00까지", "2026.03.28까지", "2026년 3월 28일 마감"
     (
         r"(\d{4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})[일]?"
-        r"(?:\([월화수목금토일]\))?"   # optional (요일)
-        r"(?:\.|\))?"                  # optional trailing dot/paren
-        r"(?:\s*\d{1,2}:\d{2})?"       # optional 시간 HH:MM
+        r"(?:\([월화수목금토일]\))?"  # optional (요일)
+        r"(?:\.|\))?"  # optional trailing dot/paren
+        r"(?:\s*\d{1,2}:\d{2})?"  # optional 시간 HH:MM
         r"\s*(?:까지|마감|접수마감|신청마감|제출마감|모집마감)"
     ),
     # [2] 기간 키워드 + 범위 → 끝 날짜 캡처
@@ -126,7 +126,12 @@ def _parse_short_date(month: str, day: str, reference_date: date | None) -> str 
     except ValueError:
         return None
 
-    if reference_date and candidate < reference_date and reference_date.month >= 10 and candidate.month <= 2:
+    if (
+        reference_date
+        and candidate < reference_date
+        and reference_date.month >= 10
+        and candidate.month <= 2
+    ):
         try:
             candidate = date(base.year + 1, candidate.month, candidate.day)
         except ValueError:
@@ -138,9 +143,7 @@ def _parse_short_date(month: str, day: str, reference_date: date | None) -> str 
 
 
 def _extract_date_spans(text: str, reference_date: date | None) -> list[tuple[int, int, str]]:
-    full_pattern = re.compile(
-        r"(\d{4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*(?:일)?"
-    )
+    full_pattern = re.compile(r"(\d{4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*(?:일)?")
     short_pattern = re.compile(r"(?<!\d)(\d{1,2})\s*(?:[./]|월)\s*(\d{1,2})\s*(?:일)?")
 
     dates: list[tuple[int, int, str]] = []
@@ -190,10 +193,10 @@ def _first_application_date_range_end(text: str, reference_date: date | None) ->
     if len(dates) < 2:
         return None
 
-    for first, second in zip(dates, dates[1:]):
-        gap = text[first[1]:second[0]]
-        before = text[max(0, first[0] - 80):first[0]]
-        after = text[second[1]:min(len(text), second[1] + 80)]
+    for first, second in zip(dates, dates[1:], strict=False):
+        gap = text[first[1] : second[0]]
+        before = text[max(0, first[0] - 80) : first[0]]
+        after = text[second[1] : min(len(text), second[1] + 80)]
         if (
             len(gap) <= 24
             and re.search(r"[~\-–]", gap)
@@ -244,7 +247,9 @@ def _extract_datetime_records(
             continue
         parsed_time = None
         if match.group(5):
-            parsed_time = _parse_time(match.group(4), match.group(5), match.group(6), match.group(7))
+            parsed_time = _parse_time(
+                match.group(4), match.group(5), match.group(6), match.group(7)
+            )
         records.append((match.start(), match.end(), parsed_date, parsed_time))
         occupied.append(match.span())
 
@@ -259,7 +264,9 @@ def _extract_datetime_records(
             continue
         parsed_time = None
         if match.group(4):
-            parsed_time = _parse_time(match.group(3), match.group(4), match.group(5), match.group(6))
+            parsed_time = _parse_time(
+                match.group(3), match.group(4), match.group(5), match.group(6)
+            )
         records.append((match.start(), match.end(), parsed_date, parsed_time))
 
     return sorted(records, key=lambda item: item[0])
@@ -307,21 +314,25 @@ def _extract_event_deadline_from_context(
     )
 
     for context_match in _EVENT_DATETIME_CONTEXT_RE.finditer(normalized):
-        snippet = normalized[context_match.start():min(len(normalized), context_match.end() + 160)]
+        snippet = normalized[
+            context_match.start() : min(len(normalized), context_match.end() + 160)
+        ]
         date_match = date_pattern.search(snippet)
         if date_match:
             parsed_date = _parse_date(date_match.group(1), date_match.group(2), date_match.group(3))
-            after_date = snippet[date_match.end():min(len(snippet), date_match.end() + 50)]
+            after_date = snippet[date_match.end() : min(len(snippet), date_match.end() + 50)]
         else:
             dates = _extract_dates(snippet, reference_date)
             if not dates:
                 continue
             parsed_date = dates[0][1]
-            after_date = snippet[dates[0][0]:min(len(snippet), dates[0][0] + 80)]
+            after_date = snippet[dates[0][0] : min(len(snippet), dates[0][0] + 80)]
 
         times = list(_EVENT_TIME_VALUE_RE.finditer(after_date))
         parsed_time = None
-        if len(times) >= 2 and re.search(r"[~\-–]\s*$", after_date[times[0].end():times[1].start()]):
+        if len(times) >= 2 and re.search(
+            r"[~\-–]\s*$", after_date[times[0].end() : times[1].start()]
+        ):
             first_marker = times[0].group(1)
             second_marker = times[1].group(1) or first_marker
             parsed_time = _parse_time(
@@ -354,14 +365,14 @@ def _has_application_deadline_evidence(
 
         window_start = max(0, current[0] - 100)
         window_end = min(len(normalized), current[1] + 100)
-        before = normalized[window_start:current[0]]
-        after = normalized[current[1]:window_end]
+        before = normalized[window_start : current[0]]
+        after = normalized[current[1] : window_end]
 
         if idx > 0:
             previous = dates[idx - 1]
-            gap = normalized[previous[1]:current[0]]
-            range_before = normalized[max(0, previous[0] - 100):previous[0]]
-            range_after = normalized[current[1]:min(len(normalized), current[1] + 100)]
+            gap = normalized[previous[1] : current[0]]
+            range_before = normalized[max(0, previous[0] - 100) : previous[0]]
+            range_after = normalized[current[1] : min(len(normalized), current[1] + 100)]
             if (
                 len(gap) <= 24
                 and re.search(r"[~\-–]", gap)
@@ -383,7 +394,7 @@ def _extract_deadline_from_context(text: str, reference_date: date | None) -> st
 
     for match in _DEADLINE_CONTEXT_RE.finditer(normalized):
         end = min(len(normalized), match.end() + 180)
-        snippet = normalized[match.start():end]
+        snippet = normalized[match.start() : end]
         dates = _extract_dates(snippet, reference_date)
         if dates:
             marker = re.search(r"(?:까지|마감|기한|종료)", snippet)
@@ -451,8 +462,8 @@ def extract_deadline_time(
         return None
 
     for start, end, _, parsed_time in reversed(candidates):
-        before = normalized[max(0, start - 90):start]
-        after = normalized[end:min(len(normalized), end + 40)]
+        before = normalized[max(0, start - 90) : start]
+        after = normalized[end : min(len(normalized), end + 40)]
         if re.search(r"(?:까지|마감|기한|종료)", after):
             return parsed_time
         if _DEADLINE_CONTEXT_RE.search(before):
@@ -567,6 +578,7 @@ def extract_apply_method(text: str) -> str | None:
 
 
 # ── regex 통합 추출 ───────────────────────────────────────
+
 
 def extract_key_info(
     body_text: str,
@@ -715,6 +727,7 @@ def _parse_ai_response(raw: str) -> dict:
         deadline = None
     if deadline is not None:
         from datetime import date as _date
+
         try:
             dl = _date.fromisoformat(deadline)
             today = datetime.now(ZoneInfo("Asia/Seoul")).date()
@@ -779,6 +792,7 @@ def _ai_extract(text: str, api_key: str, model_name: str) -> dict | None:
 
 # ── 통합 추출 (AI + regex fallback) ─────────────────────
 
+
 def extract_key_info_with_ai(
     body_text: str,
     attachments: list[dict],
@@ -824,7 +838,9 @@ def extract_key_info_with_ai(
         deadline = ai_result["deadline"]
     elif ai_result["deadline"] is None or ai_result["deadline"] == regex_result["deadline"]:
         deadline = regex_result["deadline"]
-    elif _has_application_deadline_evidence(combined, ai_result["deadline"], _parse_reference_date(notice_date)):
+    elif _has_application_deadline_evidence(
+        combined, ai_result["deadline"], _parse_reference_date(notice_date)
+    ):
         log.info(
             "  [AI] regex deadline overridden after application-context evidence check: "
             f"{regex_result['deadline']} -> {ai_result['deadline']}"
@@ -848,7 +864,11 @@ def extract_key_info_with_ai(
         "deadline": deadline,
         "deadline_time": deadline_time,
         "deadline_at": _build_deadline_at(deadline, deadline_time),
-        "target":       ai_result["target"]       if ai_result["target"]       is not None else regex_result["target"],
-        "apply_method": ai_result["apply_method"] if ai_result["apply_method"] is not None else regex_result["apply_method"],
+        "target": ai_result["target"]
+        if ai_result["target"] is not None
+        else regex_result["target"],
+        "apply_method": ai_result["apply_method"]
+        if ai_result["apply_method"] is not None
+        else regex_result["apply_method"],
     }
     return merged

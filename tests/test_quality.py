@@ -121,14 +121,29 @@ class QualityAuditTests(unittest.TestCase):
             _notice(
                 "SW_1",
                 attachments=[
-                    {"name": "a.pdf", "checksum": "abc", "url": "https://example.test/a", "file_key": "a"},
-                    {"name": "a-copy.pdf", "checksum": "abc", "url": "https://example.test/a", "file_key": "b"},
+                    {
+                        "name": "a.pdf",
+                        "checksum": "abc",
+                        "url": "https://example.test/a",
+                        "file_key": "a",
+                    },
+                    {
+                        "name": "a-copy.pdf",
+                        "checksum": "abc",
+                        "url": "https://example.test/a",
+                        "file_key": "b",
+                    },
                 ],
             ),
             _notice(
                 "SW_2",
                 attachments=[
-                    {"name": "a.pdf", "checksum": "abc", "url": "https://example.test/a", "file_key": "c"}
+                    {
+                        "name": "a.pdf",
+                        "checksum": "abc",
+                        "url": "https://example.test/a",
+                        "file_key": "c",
+                    }
                 ],
             ),
         ]

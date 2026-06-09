@@ -153,8 +153,7 @@ def re_extract(
             continue
 
         diff_str = " | ".join(
-            f"{key}: {_preview(old[key])!r} -> {_preview(result[key])!r}"
-            for key in sorted(changed)
+            f"{key}: {_preview(old[key])!r} -> {_preview(result[key])!r}" for key in sorted(changed)
         )
         print(f"[{i}/{len(files)}] {path.stem}  {diff_str}")
 
@@ -182,8 +181,12 @@ def re_extract(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Rebuild derived raw JSON fields.")
-    parser.add_argument("--dry-run", action="store_true", help="print changes without writing files")
-    parser.add_argument("--no-ai", action="store_true", help="disable AI extraction for key info fields")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print changes without writing files"
+    )
+    parser.add_argument(
+        "--no-ai", action="store_true", help="disable AI extraction for key info fields"
+    )
     parser.add_argument(
         "--only-null",
         action="store_true",
