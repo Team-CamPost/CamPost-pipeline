@@ -132,7 +132,9 @@ def reparse_hwp_attachments(dry_run: bool, source_filter: str | None) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Rebuild HWP attachment extracted_text fields.")
-    parser.add_argument("--dry-run", action="store_true", help="print changes without writing files")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print changes without writing files"
+    )
     parser.add_argument("--source", help="process one source code only, e.g. SW")
     args = parser.parse_args()
     reparse_hwp_attachments(dry_run=args.dry_run, source_filter=args.source)

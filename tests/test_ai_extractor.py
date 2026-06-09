@@ -98,7 +98,9 @@ class TestAiExtraction(unittest.TestCase):
             api_key=self.api_key,
             model_name=self.model,
         )
-        print(f"\n[AI 결과] deadline={result['deadline']}, target={result['target']}, apply={result['apply_method']}")
+        print(
+            f"\n[AI 결과] deadline={result['deadline']}, target={result['target']}, apply={result['apply_method']}"
+        )
         # AI가 날짜를 추출했는지 확인 (regex도 이건 잡을 수 있으나 AI 경로 검증)
         self.assertIsNotNone(result["deadline"])
         self.assertEqual(result["deadline"], "2026-05-09")

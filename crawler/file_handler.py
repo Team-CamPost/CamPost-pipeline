@@ -727,7 +727,9 @@ def extract_text(path: Path, ext: str) -> tuple[str, str]:
     return "", "none"
 
 
-async def extract_external_images(body_html: str, article_id: str, base_url: str = "") -> list[dict]:
+async def extract_external_images(
+    body_html: str, article_id: str, base_url: str = ""
+) -> list[dict]:
     """
     본문 HTML에서 외부 URL <img src="https://..."> 이미지를 다운로드해 저장.
     base64 인라인 이미지는 제외 (extract_inline_images가 처리).
@@ -934,7 +936,9 @@ async def process_attachments(attachments: list[dict], article_id: str) -> list[
         r2_url = att.get("r2_url")
         preview_pdf_r2_url = att.get("preview_pdf_r2_url")
         if download_ok:
-            uploaded_r2_url = await asyncio.to_thread(upload_to_r2, save_path, local_path, mime_type)
+            uploaded_r2_url = await asyncio.to_thread(
+                upload_to_r2, save_path, local_path, mime_type
+            )
             r2_url = uploaded_r2_url or r2_url
 
             if pdf_preview.get("conversion_status") == "success":

@@ -6,8 +6,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from crawler import file_handler
-from crawler.file_handler import convert_to_pdf_preview, download_file, extract_text, process_attachments
-
+from crawler.file_handler import (
+    convert_to_pdf_preview,
+    download_file,
+    extract_text,
+    process_attachments,
+)
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
@@ -180,11 +184,15 @@ class FileHandlerTests(unittest.TestCase):
 
     def test_chrome_args_only_disables_sandbox_for_root_user(self):
         with patch.object(file_handler.os, "geteuid", return_value=1000, create=True):
-            args = file_handler._chrome_args("chrome", Path("out.pdf"), Path.cwd(), headless="--headless")
+            args = file_handler._chrome_args(
+                "chrome", Path("out.pdf"), Path.cwd(), headless="--headless"
+            )
         self.assertNotIn("--no-sandbox", args)
 
         with patch.object(file_handler.os, "geteuid", return_value=0, create=True):
-            args = file_handler._chrome_args("chrome", Path("out.pdf"), Path.cwd(), headless="--headless")
+            args = file_handler._chrome_args(
+                "chrome", Path("out.pdf"), Path.cwd(), headless="--headless"
+            )
         self.assertIn("--no-sandbox", args)
 
     def test_convert_to_pdf_preview_marks_rhwp_unavailable(self):
@@ -255,10 +263,18 @@ class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
 
             with (
                 patch.object(file_handler, "FILES_DIR", files_dir),
-                patch.object(file_handler, "download_file", new=AsyncMock(return_value=True)) as download,
+                patch.object(
+                    file_handler, "download_file", new=AsyncMock(return_value=True)
+                ) as download,
             ):
                 results = await process_attachments(
-                    [{"name": "cached.docx", "url": "https://example.test/cached.docx", "ext": "docx"}],
+                    [
+                        {
+                            "name": "cached.docx",
+                            "url": "https://example.test/cached.docx",
+                            "ext": "docx",
+                        }
+                    ],
                     "SW_1",
                 )
 
@@ -285,7 +301,9 @@ class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
 
             with (
                 patch.object(file_handler, "FILES_DIR", files_dir),
-                patch.object(file_handler, "download_file", new=AsyncMock(side_effect=fake_download)) as download,
+                patch.object(
+                    file_handler, "download_file", new=AsyncMock(side_effect=fake_download)
+                ) as download,
             ):
                 results = await process_attachments(
                     [{"name": "empty.txt", "url": "https://example.test/empty.txt", "ext": "txt"}],
@@ -310,7 +328,9 @@ class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
             files_dir = Path(tmp)
             with (
                 patch.object(file_handler, "FILES_DIR", files_dir),
-                patch.object(file_handler, "download_file", new=AsyncMock(side_effect=fake_download)),
+                patch.object(
+                    file_handler, "download_file", new=AsyncMock(side_effect=fake_download)
+                ),
                 patch.object(file_handler, "extract_text", return_value=("", "pdfplumber")),
             ):
                 results = await process_attachments(
@@ -335,12 +355,22 @@ class AttachmentCacheTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(file_handler, "FILES_DIR", files_dir),
                 patch.object(file_handler, "PDF_CONVERSION_ENABLED", True),
                 patch.object(file_handler, "PDF_PREVIEW_EXTS", {"hwp", "hwpx"}),
-                patch.object(file_handler, "download_file", new=AsyncMock(side_effect=fake_download)),
-                patch.object(file_handler, "extract_text", return_value=("HWP text", "pyhwp_bodytext")),
+                patch.object(
+                    file_handler, "download_file", new=AsyncMock(side_effect=fake_download)
+                ),
+                patch.object(
+                    file_handler, "extract_text", return_value=("HWP text", "pyhwp_bodytext")
+                ),
                 patch.object(file_handler, "_find_rhwp", return_value=None),
             ):
                 results = await process_attachments(
-                    [{"name": "sample.hwp", "url": "https://example.test/sample.hwp", "ext": "hwp"}],
+                    [
+                        {
+                            "name": "sample.hwp",
+                            "url": "https://example.test/sample.hwp",
+                            "ext": "hwp",
+                        }
+                    ],
                     "SW_1",
                 )
 

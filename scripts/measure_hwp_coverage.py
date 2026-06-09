@@ -7,7 +7,6 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
-
 try:
     from hwp5.xmlmodel import Hwp5File
 except Exception:  # pragma: no cover
@@ -117,7 +116,9 @@ def main() -> None:
         try:
             data = json.loads(raw_path.read_text(encoding="utf-8"))
         except Exception as exc:
-            errors.append({"notice": raw_path.stem, "name": raw_path.name, "error": f"json_error: {exc}"})
+            errors.append(
+                {"notice": raw_path.stem, "name": raw_path.name, "error": f"json_error: {exc}"}
+            )
             continue
         notice_id = data.get("id") or raw_path.stem
         for attachment in data.get("attachments") or []:
@@ -126,14 +127,18 @@ def main() -> None:
             local_path = attachment.get("local_path") or ""
             path = resolve_local_path(root, local_path)
             if not path.exists():
-                errors.append({"notice": notice_id, "name": attachment.get("name"), "error": "missing_file"})
+                errors.append(
+                    {"notice": notice_id, "name": attachment.get("name"), "error": "missing_file"}
+                )
                 continue
             try:
                 body = bodytext_text(path)
                 prv = prvtext_text(path)
                 cli = hwp5txt_text(path)
             except Exception as exc:
-                errors.append({"notice": notice_id, "name": attachment.get("name"), "error": repr(exc)})
+                errors.append(
+                    {"notice": notice_id, "name": attachment.get("name"), "error": repr(exc)}
+                )
                 continue
             stored = attachment.get("extracted_text") or ""
             body_chars = len(body)
@@ -161,7 +166,9 @@ def main() -> None:
 
     ratios = [row["stored_vs_body_pct"] for row in rows if row["stored_vs_body_pct"] is not None]
     prv_ratios = [row["prv_vs_body_pct"] for row in rows if row["prv_vs_body_pct"] is not None]
-    cli_ratios = [row["stored_vs_hwp5txt_pct"] for row in rows if row["stored_vs_hwp5txt_pct"] is not None]
+    cli_ratios = [
+        row["stored_vs_hwp5txt_pct"] for row in rows if row["stored_vs_hwp5txt_pct"] is not None
+    ]
     shortfalls = [row["bodytext_chars"] - row["stored_chars"] for row in rows]
     summary = {
         "root": str(root),

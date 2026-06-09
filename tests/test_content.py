@@ -27,7 +27,7 @@ class ContentTests(unittest.TestCase):
 
     def test_rewrites_unquoted_image_src_and_removes_responsive_sources(self):
         payload = build_content_payload(
-            '<p><img src=https://example.com/poster.png '
+            "<p><img src=https://example.com/poster.png "
             'srcset="https://example.com/poster-2x.png 2x" sizes="100vw"></p>',
             [
                 {
@@ -88,7 +88,7 @@ class ContentTests(unittest.TestCase):
 
     def test_counts_tables_and_strips_script(self):
         payload = build_content_payload(
-            '<script>alert(1)</script><table><tr><td>A</td></tr></table>',
+            "<script>alert(1)</script><table><tr><td>A</td></tr></table>",
             [],
         )
 
@@ -97,7 +97,7 @@ class ContentTests(unittest.TestCase):
 
     def test_sanitizes_javascript_urls_events_and_comments(self):
         payload = build_content_payload(
-            '<!-- <table></table> -->'
+            "<!-- <table></table> -->"
             '<a href=javascript:alert(1) onclick="alert(2)">bad</a>'
             '<img src=javascript:alert(3) onerror="alert(4)">',
             [],

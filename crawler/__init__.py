@@ -22,7 +22,17 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from playwright.async_api import async_playwright
 
 from .backend_importer import submit_raw_file
-from .config import AI_ENABLED, CRAWL_INTERVAL_MINUTES, DETAIL_URL_TEMPLATE, GEMINI_API_KEY, GEMINI_MODEL, HEADLESS, PAGE_TIMEOUT, RAW_STORE_DIR, SOURCES
+from .config import (
+    AI_ENABLED,
+    CRAWL_INTERVAL_MINUTES,
+    DETAIL_URL_TEMPLATE,
+    GEMINI_API_KEY,
+    GEMINI_MODEL,
+    HEADLESS,
+    PAGE_TIMEOUT,
+    RAW_STORE_DIR,
+    SOURCES,
+)
 from .content import build_content_payload
 from .db import create_crawl_job, finish_crawl_job, log_parse
 from .extractor import extract_key_info_with_ai
@@ -198,7 +208,9 @@ async def run_all() -> None:
         log.error("활성 소스가 없습니다. CRAWL_SOURCES 환경변수를 확인하세요.")
         return
 
-    ai_status = f"AI 마감일 추출: {'ON (' + GEMINI_MODEL + ')' if AI_ENABLED else 'OFF (regex only)'}"
+    ai_status = (
+        f"AI 마감일 추출: {'ON (' + GEMINI_MODEL + ')' if AI_ENABLED else 'OFF (regex only)'}"
+    )
     log.info(
         f"크롤링 시작 — 활성 소스 {len(SOURCES)}개: "
         + ", ".join(f"{s['name']}({s['code']})" for s in SOURCES)
@@ -292,11 +304,15 @@ def run_startup_reextract() -> None:
             except Exception as exc:
                 log.warning(f"[startup] {path.name} content_html generation failed: {exc}")
             else:
-                if any(data.get(k) != v for k, v in content_payload.items()) or needs_content_backfill(data):
+                if any(
+                    data.get(k) != v for k, v in content_payload.items()
+                ) or needs_content_backfill(data):
                     data.update(content_payload)
                     stamp_content(data)
                     stamp_reprocessed_at(data)
-                    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    path.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
                     content_updated += 1
         if needs_key_info_backfill(data):
             todo.append(path)
@@ -319,13 +335,13 @@ def run_startup_reextract() -> None:
             log.warning(f"[startup] {path.name} 읽기 실패: {exc}")
             continue
 
-        old_deadline     = data.get("deadline")
+        old_deadline = data.get("deadline")
         old_deadline_time = data.get("deadline_time")
         old_deadline_at = data.get("deadline_at")
-        old_target       = data.get("target")
+        old_target = data.get("target")
         old_apply_method = data.get("apply_method")
 
-        body_text   = data.get("body_text") or ""
+        body_text = data.get("body_text") or ""
         raw_attachments = data.get("attachments") or []
         attachments = raw_attachments if isinstance(raw_attachments, list) else []
 
@@ -349,16 +365,20 @@ def run_startup_reextract() -> None:
             continue
 
         new_deadline = old_deadline if old_deadline is not None else result["deadline"]
-        new_deadline_time = old_deadline_time if old_deadline_time is not None else result["deadline_time"]
+        new_deadline_time = (
+            old_deadline_time if old_deadline_time is not None else result["deadline_time"]
+        )
         computed_deadline_at = build_deadline_at(new_deadline, new_deadline_time)
         new_deadline_at = old_deadline_at if old_deadline_at is not None else computed_deadline_at
         new_target = old_target if old_target is not None else result["target"]
-        new_apply_method = old_apply_method if old_apply_method is not None else result["apply_method"]
+        new_apply_method = (
+            old_apply_method if old_apply_method is not None else result["apply_method"]
+        )
 
-        data["deadline"]     = new_deadline
+        data["deadline"] = new_deadline
         data["deadline_time"] = new_deadline_time
         data["deadline_at"] = new_deadline_at
-        data["target"]       = new_target
+        data["target"] = new_target
         data["apply_method"] = new_apply_method
         stamp_key_info_backfill(data)
         stamp_reprocessed_at(data)
